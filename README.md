@@ -24,9 +24,8 @@ Download and click the . **jmpaddin** file to install Predictor Explainer:
 
 If you have a previous version installed, it will be automatically removed.
 
-PyJMP (Python for JMP) can be installed optionally.
+Optional: [PyJMP (Python for JMP)](https://github.com/industrial-data/pyjmp) can also be installed (SHAP plots).
 
-[https://github.com/industrial-data/pyjmp](https://github.com/industrial-data/pyjmp)
 
 ## 2 – Example: Distillation column (continuous process)
 
