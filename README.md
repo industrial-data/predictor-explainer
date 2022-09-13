@@ -18,9 +18,9 @@ For further details and applications of ML applied to industrial processes, you 
 
 ## 1 – Download and installation
 
-Download and click the . **jmpaddin** file to install the latest version of Predictor Explainer from:
+Download and click the . **jmpaddin** file to install Predictor Explainer:
 
-[https://github.com/industrial-data/predictor-explainer](https://github.com/industrial-data/predictor-explainer)
+[Download latest version](https://github.com/industrial-data/predictor-explainer/raw/main/Latest_PredictorExplainer.jmpaddin)
 
 If you have a previous version installed, it will be automatically removed.
 
@@ -28,7 +28,7 @@ PyJMP (Python for JMP) can be installed optionally.
 
 [https://github.com/industrial-data/pyjmp](https://github.com/industrial-data/pyjmp)
 
-## 2 – Distillation column (continuous process)
+## 2 – Example: Distillation column (continuous process)
 
 In this example will be illustrate how to screen tags (sensor data) to quickly identify correlated factors to the yield in a distillation column.
 
@@ -70,7 +70,7 @@ If PyJMP is installed and the option to show SHAP plots is activated, an interac
 
 Additional hidden tables containing SHAP, UMAP and clustering results will be accessible via the home menu.
 
-## 3 – Batch data analysis
+## 3 – Example: Batch data analysis
 
 Predictor Explainer can also be used to screen sensors measuring batch processes. The file named '_Fermentation\_Batch\_Data.jmp'_ illustrates the challenge of combining unique values coming from a lab analysis with process data.
 
@@ -84,7 +84,7 @@ If there is information about product (grade) or phase (stage) of the batch, the
 
 In the example, Predictor Explainer identified the strongest sensor (tag). ![](/media/image10.png)
 
-## Annex A - Creating your own version of the add-in
+## Creating your own version of the add-in
 
 If you want to distribute or modify a new version of the JMP addin, there are two important things to consider.
 
