@@ -8,6 +8,8 @@ Predictor explainer automates the screening of process variables using feature e
 
 For further details and applications of ML applied to industrial processes, you can have a look at our open-access review: [https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c](https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c)
 
+---
+
 [Installation steps](#_Toc113919505)
 
 [1 – Download and installation](#_Toc113919506)
@@ -30,7 +32,7 @@ If you have a previous version installed, it will be automatically removed.
 
 PyJMP (Python for JMP) can be installed optionally.
 
-[https://github.com/industrial-data/predictor-explainer/pyjmp](https://github.com/industrial-data/predictor-explainer/pyjmp)
+[https://github.com/industrial-data/pyjmp](https://github.com/industrial-data/pyjmp)
 
 ## 2 – Distillation column (continuous process)
 
