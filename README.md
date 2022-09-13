@@ -2,23 +2,17 @@
 
 AutoML and ExplainableAI for JMP (+Python)
 
-Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. If PyJMP is installed (optional), SHAP plots and UMAP will be automatically calculated as well.
+Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. If [PyJMP](https://github.com/industrial-data/pyJMP/) is installed (**optional**), SHAP plots and UMAP will be automatically calculated as well.
+
+For further details and applications of ML applied to industrial processes, you can have a look at our open-access review:
+
+* [Industrial data science – a review of machine learning applications for chemical and process industries](https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c)
 
 ![](/media/image1.png)
 
-For further details and applications of ML applied to industrial processes, you can have a look at our open-access review: [https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c](https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c)
+
 
 ---
-
-[Installation steps](#_Toc113919505)
-
-[1 – Download and installation](#_Toc113919506)
-
-[2 – Distillation column (continuous process)](#_Toc113919507)
-
-[3 – Batch data analysis](#_Toc113919508)
-
-[Annex A - Creating your own version of the add-in](#_Toc113919509)
 
 ## Installation steps
 
