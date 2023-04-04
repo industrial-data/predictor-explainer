@@ -81,7 +81,11 @@ Predictor explainer will first create a table with summary statistics (also call
 
 If there is information about product (grade) or phase (stage) of the batch, these will be also used to generate more granular summary statistics. Using the noise contribution as a filter will eliminate all calculated features below it. When PhaseID is introduced as numeric and ordinal column (1, 2, 3…), an automatic aligning of the batch will be performed and shown.
 
-In the example, Predictor Explainer identified the strongest sensor (tag). ![](/media/image10.png)
+In the example, Predictor Explainer identified the strongest sensor (tag) in terms of correlation (supervised learning). ![](/media/image10.png)
+
+If no output is given (no Y, only X's), Predictor screening identifies the sensor with highest variability and creates a global anomaly score (unsupervised learning). 
+
+![](/media/image13.png)
 
 ## Creating your own version of the add-in
 
