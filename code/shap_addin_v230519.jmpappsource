@@ -1,0 +1,2403 @@
+﻿JMP App(Set Name("Predictor Explainer"), Set Description("Screen process data using automatically. PyJMP required to obtain SHAP values.
+
+industrialdata.org"), Auto Launch(1), Snap To Grid(1), Show Grid(1), Show Properties(1), Show Sources(1), Group By Category(1), Dashboard Mode(0), Parameters, Tables(DataTable1 = GuiTable(Set Path(""), Set Label("table"), Location("Current Data Table"), Invisible(0))), Script(JSL Quote(// This script is executed when the application is run.
+// Named objects have been created for the application modules
+// (for example, "Module1") and the pre-defined object
+// "thisApplication" refers to the application object itself.
+// Variables and functions declared here are scoped to the
+// Application namespace.
+
+)), Allocate(Module1 = Plan(PreAllocate, Script(JSL Quote(// This script is executed when a new module instance is
+// created.  The pre-defined object "thisModuleInstance" refers
+// to the instance object, but other objects such as boxes and
+// scripts have not yet been created.  Variables declared here are
+// scoped to the ModuleInstance namespace.
+
+// author: Francisco Navarro (GH @franktoffel), Carlos Perez-Galvan 
+// URL: https://github.com/industrial-data/predictor-explainer   
+// license: BSD Clause 3
+
+if(isempty(CurrentDataTable()),
+	DataTable1 = Open( "$ADDIN_HOME(Predictor_Explainer)/dist_tower_na.jmp");
+	,
+	DataTable1 = CurrentDataTable();
+);
+
+// Close All( Data Tables, invisible, NoSave );
+
+// This special function will receive parameters passed to CreateInstance()
+
+OnModuleLoad({},
+);
+
+thisModuleInstance << CreateObjects;
+
+// After this point your module instance objects have been created
+// and can be referred to by name (for example, "Button1").
+
+
+YButtonPress = Function( {this},
+	colListGroupY << Append( colListData << GetSelected )
+);
+
+
+XButtonPress = Function( {this},
+	colListGroupX << Append( colListData << GetSelected )
+);
+
+TimeButtonPress = Function( {this},
+	colListGroupTime << Append( colListData << GetSelected )
+);
+
+ZButtonPress = Function( {this},
+	colListGroupZ << Append( colListData << GetSelected )
+);
+
+WeightButtonPress = Function( {this},
+	colListGroupWeight << Append( colListData << GetSelected )
+);
+
+GradeButtonPress = Function( {this},
+	colListGrade << Append( colListData << GetSelected )
+);
+
+BatchIDButtonPress = Function( {this},
+	colListBatchID << Append( colListData << GetSelected )
+);
+
+PhaseIDButtonPress = Function( {this},
+	colListPhaseID << Append( colListData << GetSelected )
+);
+
+CheckBoxDifferencesPress = Function({this},
+	is_active = CheckBoxDifferences << Get();
+	print("Differences activated (0 or 1)", is_active);
+	rowdiffBox << Enable(is_active);
+);
+
+
+
+// General functions
+
+// To call from other buttons or help the add-in
+
+ResetButtonPress=Function({this},
+	clearRoles; // see function at the end
+);
+
+
+// Clear all current settings
+clearRoles = Expr(
+	colListGroupY << RemoveAll;
+	colListGroupX << RemoveAll;
+	colListGroupTime << RemoveAll;
+	colListGroupZ << RemoveAll;
+	colListGroupWeight << RemoveAll;
+	
+	// Batch
+	colListGrade << RemoveAll;
+	colListBatchID << RemoveAll;
+	colListPhaseID << RemoveAll;
+);
+
+
+RemoveButtonPress=Function({this},
+	// This function is called when the button is pressed
+	colListGroupY << RemoveSelected;
+	colListGroupX << RemoveSelected;
+	colListGroupTime << RemoveSelected;
+	colListGroupZ << RemoveSelected;
+	colListGroupWeight << RemoveSelected;
+	
+	// Batch
+	colListGrade << RemoveSelected;
+	colListBatchID << RemoveSelected;
+	colListPhaseID << RemoveSelected;
+);
+
+
+CancelButtonPress=Function({this},
+Current Window() << CloseWindow 
+);
+
+// Default to activate pred. screening
+//PredScreeningBox << Set(PredScreeningBox << Get Items);
+
+
+RecallButtonPress=Function({this},
+	clearRoles;
+	/* Restore any previous settings from the global variables */
+	Try(
+		colListGroupY << Append( ::colListGroupRecallY );
+		colListGroupX << Append( ::colListGroupRecallX );
+		colListGroupTime << Append( ::colListGroupTime );
+		colListGroupZ<< Append( ::colListGroupZ);
+		colListGroupWeight << Append( ::colListGroupWeight );
+		
+		colListGrade << Append( ::colListGradeRecall );
+		colListBatchID << Append( ::colListBatchIDRecall );
+		colListPhaseID << Append( ::colListPhaseIDRecall );
+		
+		NumberTreesBox << Set( num(::NtreesRecall) );
+		SignalToNoiseRatioBox << Set( num(::SignalToNoiseRatio) );
+		NdimUMAPBox << Set( num(::NdimUMAP) );
+		distanceBox << SetItems( ::distance );
+		rowdiffBox << Set( num(::nRows) );
+		
+		CheckBoxDifferences << Set(::DiffsCheckbox);
+		// TODO fix me
+		//PredScreeningBox << Set(::PredScreeningBoxRecall[1]);
+		
+	);
+);
+
+// Expression to store the current settings in global variable
+recallRoles = Expr(
+	::colListGroupRecallY = colListGroupY << GetItems;
+	::colListGroupRecallX = colListGroupX << GetItems;
+	::NtreesRecall = NumberTreesBox << GetText();
+	::SignalToNoiseRatio = SignalToNoiseRatioBox << GetText();
+	::NdimUMAP = NdimUMAPBox << GetText();
+	::distance = distanceBox << GetText();
+	::nRows = rowdiffBox << GetText();
+	::colListGroupTime = colListGroupTime << GetItems;
+	::colListGroupZ= colListGroupZ << GetItems;
+	::colListGroupWeight = colListGroupWeight << GetItems;
+	
+	::colListGradeRecall = 	colListGrade << GetItems;
+	::colListBatchIDRecall = colListBatchID << GetItems;
+	::colListPhaseIDRecall = colListPhaseID << GetItems;
+	
+	::DiffsCheckbox = CheckBoxDifferences << Get();
+	
+);
+
+print("Checking if Pyton is installed");
+is_python_installed = 0;
+JMP_PYTHON_PTH = "C:\ProgramData\miniforge_JMP";
+
+If(Directory Exists(JMP_PYTHON_PTH),
+		print("Python (PyJMP) is installed");
+		is_python_installed = 1;,
+		
+		print("Python (PyJMP) is not installed");
+		CheckBoxPython << Set Items( {"Python (PyJMP) not installed."});
+		CheckBoxPython << Enable( is_python_installed );
+	);
+
+	
+//if(is_python_installed == 0,
+//	print("This addin needs Python to use SHAP and UMAP. Please install 'pyJMP' from github.com/industrial-data/predictor-explainer."));
+
+CheckBoxPythonPress = Function({this},
+	is_Python_checkbox_active = CheckBoxPython << Get();
+
+	shoW(is_python_installed);
+	show(is_Python_checkbox_active);
+	
+	if(is_Python_checkbox_active ==1 & is_python_installed == 1,
+		PanelPython << Visibility( "Visible" );,
+		PanelPython << Visibility( "Collapse" );
+		);
+
+	);	
+	
+PanelPython << Visibility( "Collapse" );
+
+// Function to open folder with JupyterNotebook
+OpenNotebook = Function({this},
+
+// Do not tabulate the following string, as the bat file is generated AS IS
+
+open_notebook_bat = "@ECHO OFF\!N
+:: author = Francisco Navarro (@franktoffel)\!N
+:: URL = https://github.com/industrial-data/predictor-explainer\!N
+:: License = BSD-Clause 3\!N
+set JMP_PYTHON_PTH=C:\ProgramData\miniforge_JMP\!N
+CALL %JMP_PYTHON_PTH%\Scripts\activate.bat %JMP_PYTHON_PTH%\!N
+SET current_path=%~dp0\!N
+echo %current_path:~0,-1%\!N
+SET notebook_file=jmp_addin_minimum_features.ipynb\!N
+SET notebook_file_path=%current_path%%notebook_file%\!N
+echo %notebook_file_path%\!N
+call jupyter notebook %notebook_file_path%\!N
+pause";
+	
+addin_path = "$ADDIN_HOME(Predictor_Explainer)";
+	
+bat_path = ConvertFilePath( addin_path || "/open_notebook.bat", windows);
+	
+saveTextFile( bat_path, open_notebook_bat );
+	
+username = GetEnvironmentVariable("Username");
+	
+Open("$ADDIN_HOME(Predictor_Explainer)");
+);
+
+OKbuttonPress=Function({this},
+	// asigns  current data table to dt
+	dt = CurrentDataTable();
+	dt << ClearColumnSelection();
+	
+	ClearLog();// clears the log
+	//dt << Show Log( 1 );
+	
+	CurrentWindow() << CloseWindow; 
+	Close All( Data Tables, invisible, NoSave ); // closes all hidden tables (and plots)
+	// Close hidden tables only when user closes figures to avoid losing plots
+	Try(Close(dt_shap_plot_table, NoSave));
+	Try(Close(dt_shap_values, NoSave));
+	Try(Close(dt_global_shap_values, NoSave));
+	Try(Close(dt_umap, NoSave));
+	
+	// Deletes all previous temp files containing results
+	Try(DeleteFile("$temp\df_global_shap_values.csv"));
+	Try(DeleteFile("$temp\df_shap_values.csv"));
+	Try(DeleteFile("$temp\df_shap_plot_table.csv"));
+	Try(DeleteFile("$temp\df_umap.csv"));
+	
+	// User inputs
+	Try(Close( y, NoSave ));
+	Try(Close( X, NoSave ));
+	Try(Close( t, NoSave ));
+	Try(Close( Z, NoSave ));
+	Try(Close( W, NoSave ));
+	Try(Close(dt_user_parameters, NoSave));
+	
+	Try(Close( Grades, NoSave ));
+	Try(Close( BatchIDs, NoSave ));
+	Try(Close( PhaseIDs, NoSave ));
+	
+	// Deletes all previous temp files containing results
+	Try(DeleteFile("$temp\y.csv"));
+	Try(DeleteFile("$temp\X.csv"));
+	Try(DeleteFile("$temp\t.csv"));
+	Try(DeleteFile("$temp\Z.csv"));
+	Try(DeleteFile("$temp\W.csv"));
+	Try(DeleteFile("$temp\user_parameters.csv"));
+	
+	Try(DeleteFile("$temp\Grades.csv"));
+	Try(DeleteFile("$temp\BatchIDs.csv"));
+	Try(DeleteFile("$temp\PhaseIDs.csv"));
+
+	
+	// Deletes row index only if exists
+	if( try(column(dt,"row_index") << get name, "" ) == "row_index",
+			// Removes virtual link
+			column(dt,"row_index") << Set Property("Link ID", 0);
+			dt << delete column (:name("row_index"));
+			);
+	
+	print("creating row index column");
+	dt << new column( "row_index", formula( Row() ));
+	
+	Column(dt, "row_index") << Eval Formula;
+	Column(dt, "row_index") << delete formula << hide;
+
+	// gets rows that are not excluded
+	dt << Select Excluded << Invert Row Selection;
+
+	// Subset(Selected Rows( 0 ) ...
+	
+	itemsY = colListGroupY << GetItems;
+	print("Columns to export as Y", itemsY);
+		
+	itemsX= colListGroupX << GetItems;
+	print("Columns to export as X", itemsX);
+	
+	itemsGroupTime = colListGroupTime << GetItems;
+	print("Columns to export as time", itemsGroupTime);
+	
+	itemsGroupZ = colListGroupZ<< GetItems;
+	print("Columns to export as Z (supplementary)", itemsGroupZ);
+	
+	itemsGroupWeight = colListGroupWeight << GetItems;
+	print("Columns to export as Weight", itemsGroupWeight);
+	
+	itemsGrade = colListGrade << GetItems;		
+	print("Columns to export as Grade", itemsGrade);
+	
+	itemsBatchID = colListBatchID << GetItems;		
+	print("Columns to export as BatchID", itemsBatchID);
+	
+	itemsPhaseID = colListPhaseID << GetItems;		
+	print("Columns to export as PhaseID", itemsPhaseID);
+	
+	
+	print("Starting computation with user inputs (X)");
+	
+	//adds row_index column into table
+	InsertInto(itemsX, "row_index", 1);
+	
+	X = dt << Subset(
+			Selected Rows( 1 ),
+			Columns(itemsX));
+			
+	X << Set Name( "X" );
+	X << show window(0);
+	
+	// Anomaly detection routine
+	print("Generating anomaly score based on KNN outlier detection");
+	n_KNN = sqrt(round(NRows(X)+1));
+	
+	print("Removing row index from X list");
+	
+	itemsX_user = colListGroupX << GetItems;
+	
+	show(itemsX_user);
+	
+	obj_outliers = X << Explore Outliers( Y(Column(itemsX_user)));
+	obj_outliers << k Nearest Neighbor Outliers(K(n_KNN));
+	obj_outliers << Impute Missing(0);
+	obj_outliers << Save NN Distances;
+	obj_outliers << Close Window;
+	
+	
+	itemsX_new = X << Get Column Names(String);
+	// Set operation to obtain new column generated by KNN outlier analyis
+	items_KNN_distances = Associative Array(itemsX_new) << Remove(Associative Array(itemsX)) << get keys;
+
+
+	print("Adding and log-scaling distances to create a global anomaly score");
+	try(X << delete column ("anomaly_score"));
+	
+	Eval(
+		Parse(
+			"X  << New Column( \!"anomaly_score\!",
+		Formula( Log(Sum(" ||
+			concat items( items_KNN_distances, "," ) || " )+1)) 
+		);"
+		);
+	);
+		
+	Try(Column(X, "anomaly_score") << Delete Formula);
+	print("Removing KNN columns from user selection");
+	Try(X << Delete Columns( Eval(items_KNN_distances) ));
+	
+	
+	
+	print("Deleting previously calculated anomaly scores");
+	
+	Try(dt << Delete Columns("batch_anomaly_score"));
+	try(dt << delete column ("anomaly_score"));
+	print("Updating or creating anomaly score in main table");
+
+	// Update data tables
+	dt  <<
+		Update(
+			With( X ),
+			Match Columns( :row_index = :row_index ),
+			Add Columns from Update Table( Column("anomaly_score") )
+		);
+		
+		
+	Column(dt, "anomaly_score") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+	
+	if( nitems(itemsY)==0,
+		print("User has not given any Y variable (target)");
+		is_unsupervised = 1;
+		
+		print("Selecting a target (Y) using anomaly score");
+		itemsY = {"anomaly_score"};
+		,
+		print("User has given Y variable (target");
+		is_unsupervised = 0;
+	);
+	
+	show(itemsY);
+	
+	
+	print("Grouping Y per batch");
+	
+	items_grouping = {};
+	items_grouping = itemsGrade || itemsBatchID;
+	
+	
+	if(N Items(items_grouping)==1, 
+	
+		Eval (Eval Expr(
+		dt << New Column("batch_anomaly_score",
+			Formula(Col Sum( Expr(As Name(itemsY[1])), Expr(As Name(items_grouping[1]))))
+			)
+			;
+		));
+		
+	);
+	
+	// TODO do the operation at once (having a list for grouping variables)
+	if(N Items(items_grouping)==2, 
+	Eval (Eval Expr(
+		dt << New Column("batch_anomaly_score",
+			Formula(Col Sum( Expr(As Name(itemsY[1])), Expr(As Name(items_grouping[1])), Expr(As Name(items_grouping[2]))))
+			);
+		));
+		
+	);
+	
+	Try(Column(dt, "batch_anomaly_score") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" ));
+	
+	if(N Items(items_grouping)>0 & is_unsupervised == 1, 
+		print("Grouping anomaliy scores");
+		itemsY = {"batch_anomaly_score"};
+	);
+	
+	print("Deleting anomaly scores from X (automatically generated and moved to Y)");
+	try(X << delete column ("anomaly_score"));
+	try(X << delete column ("batch_anomaly_score"));
+	
+	
+	if( nitems(itemsY)>0,
+		print("Columns to export as Y", itemsY);
+		// adds row_index column into table
+		InsertInto(itemsY, "row_index", 2);
+		y = dt << Subset(
+				Selected Rows( 1 ),
+				Columns(itemsY));
+				
+		y << Set Name( "Y" );
+	);
+	
+	if( nitems(itemsGroupTime)>0,
+				//adds row_index column into table
+				InsertInto(itemsGroupTime, "row_index", 2);
+				t = dt << Subset(Selected Rows( 1 ),
+								Columns(itemsGroupTime));			
+				t_column = Column(t, itemsGroupTime[1]);
+				
+				print("changing format to sum of seconds from 1904/01/01");
+				t_column << Format(best);
+					
+				t << Set Name( "t" );	
+					
+				X << Update(
+					With( t ),
+					Match Columns( :row_index = :row_index ),
+					Add Columns from Update Table( itemsGroupTime[1])
+					);
+					
+				print("Changing format to column date in X");
+					Column(X, itemsGroupTime[1]) << Format( "y/m/d h:m:s", 22, 0 );	
+				); 
+	
+
+	
+	if( nitems(itemsGroupZ)>0,
+				//adds row_index column into table
+				InsertInto(itemsGroupZ, "row_index", 2);
+				Z = dt << Subset(Selected Rows( 1 ),
+								Columns(itemsGroupZ));			
+				z_column = Column(Z, itemsGroupZ[1]);
+				
+					
+				Z << Set Name( "Z" );	
+					
+				X << Update(
+					With( Z ),
+					Match Columns( :row_index = :row_index ),
+					Add Columns from Update Table( itemsGroupZ[1])
+					);
+					
+				); 
+
+	
+			
+			
+	
+
+	
+	if( nitems(itemsGroupWeight)>0,
+			//adds row_index column into table
+			InsertInto(itemsGroupWeight, "row_index", 2);
+			W = dt << Subset(
+			Selected Rows( 1 ),
+			Columns(itemsGroupWeight));
+			
+			W << Set Name( "W" );
+			
+			
+			X << Update(
+				With( W ),
+				Match Columns( :row_index = :row_index ),
+				Add Columns from Update Table( itemsGroupWeight[1])
+				);	
+			);
+	
+	
+
+	
+	if( nitems(itemsGrade)>0,
+			//adds row_index column into table
+			InsertInto(itemsGrade, "row_index", 2);
+			Grades = dt << Subset(
+			Selected Rows( 1 ),
+			Columns(itemsGrade));
+			
+			Grades << Set Name( "Grades" );	
+			
+			X << Update(
+				With( Grades ),
+				Match Columns( :row_index = :row_index ),
+				Add Columns from Update Table( itemsGrade[1])
+			);
+
+	
+		);
+			
+	
+	
+
+	
+	if( nitems(itemsBatchID)>0,
+			//adds row_index column into table
+			InsertInto(itemsBatchID, "row_index", 2);
+			BatchIDs = dt << Subset(
+			Selected Rows( 1 ),
+			Columns(itemsBatchID));
+			
+			BatchIDs << Set Name( "BatchIDs" );
+			
+			X << Update(
+				With( BatchIDs ),
+				Match Columns( :row_index = :row_index ),
+				Add Columns from Update Table( itemsBatchID[1])
+			);
+		);
+	
+			
+
+	
+	if( nitems(itemsPhaseID)>0,
+			
+			col_name = Column(dt, itemsPhaseID[1]);
+			col_type = col_name << Get Data Type;
+			col_model_type = col_name << Get Modeling Type;
+			
+			show(col_type);
+			show(col_model_type);
+			
+			// TODO, add a function that mimics utilities labels to code
+			// https://community.jmp.com/t5/Discussions/Label-a-column-via-scripting/td-p/258685
+			/*if(col_type == "Character",
+				print("Changing labels to code and data type to numeric for:", col_name);
+				
+				col_name << set selected(1);
+				Menu("Utilities:Labels to Codes");
+				// error Menu is not shown to user 
+				Wait(0);
+				col_name << set selected(0);
+				col_name << Set Data Type("Numeric");
+			);*/
+			
+			//adds row_index column into table
+			InsertInto(itemsPhaseID, "row_index", 2);
+			PhaseIDs = dt << Subset(
+			Selected Rows( 1 ),
+			Columns(itemsPhaseID));
+			
+			PhaseIDs << Set Name( "PhaseIDs" );	
+			
+			X << Update(
+				With( PhaseIDs ),
+				Match Columns( :row_index = :row_index ),
+				Add Columns from Update Table( itemsPhaseID[1])
+			);
+			
+		);
+	
+	print("Creating grade/batch/phase indexes in main table");
+	
+	dt_col_name_list = dt << get column names(string);
+	
+	//Try(dt << delete column (:name("Grade index")));
+	//Try(dt << delete column (:name("Batch index")));
+	//Try(dt << delete column (:name("Phase index")));
+	
+	
+	if( nitems(itemsGrade)>0 & !contains(dt_col_name_list, "Grade index"),
+		Eval( Eval Expr( dt << new column( "Grade index",
+			Formula( Col Cumulative Sum( 1, Expr(As Name(itemsGrade[1])) ) ))));	
+			
+			
+			// Metadata for formula created automatically
+			Column(dt, "Grade index") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+			dt << Move Selected Columns( {:Grade index}, after( Column(itemsGrade[1])) );
+	);
+	
+	if( nitems(itemsBatchID)>0 & !contains(dt_col_name_list, "Batch index"),
+		print("Creating batch index");
+		Eval( Eval Expr( dt << new column( "Batch index",
+		Formula( Col Cumulative Sum( 1, Expr(As Name(itemsBatchID[1]))) ))));	
+		
+		//dt << Move Selected Columns( {:Batch index}, after( Column(itemsBatchID[1])) );
+	
+		print("Creating Batch start/ends");
+		
+		Eval( Eval Expr( dt << new column( "Batch starts",
+		Formula( Expr(As Name(itemsBatchID[1]))!= Lag(Expr(As Name(itemsBatchID[1])), 1)) )));	
+		
+		Eval( Eval Expr( dt << new column( "Batch ends",
+		Formula( Expr(As Name(itemsBatchID[1]))!= Lag(Expr(As Name(itemsBatchID[1])),-1)) )));
+		
+		// Metadata for formula created automatically
+		Column(dt, "Batch index") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		Column(dt, "Batch starts") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		Column(dt, "Batch ends") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		
+		dt << Move Selected Columns( {:Batch index, :Batch starts, :Batch ends}, after( Column(itemsBatchID[1])) );
+		
+		Column(dt, "Batch starts") << Set Modeling Type( "Ordinal" );
+		Column(dt, "Batch ends") << Set Modeling Type( "Ordinal" );
+		
+		if( nitems(itemsPhaseID)>0 & !contains(dt_col_name_list, "Phase index"),
+			Eval( Eval Expr( dt << new column( "Phase index",
+		Formula( Col Cumulative Sum( 1, Expr(As Name(itemsPhaseID[1])), Expr(As Name(itemsBatchID[1]))) ))));	
+		
+		print("Creating phase starts/ends");
+		
+		Eval( Eval Expr( dt << new column( "Phase starts",
+		Formula( Expr(As Name(itemsPhaseID[1]))!= Lag(Expr(As Name(itemsPhaseID[1])), 1)) )));	
+		
+		Eval( Eval Expr( dt << new column( "Phase ends",
+		Formula( Expr(As Name(itemsPhaseID[1]))!= Lag(Expr(As Name(itemsPhaseID[1])),-1)) )));
+		
+		Eval( Eval Expr( dt << new column( "Phase counter",
+		Formula( Col Cumulative Sum( :Phase starts, Expr(As Name(itemsBatchID[1])) )) )));
+		
+		// Metadata for formula created automatically
+		Column(dt, "Phase index") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		Column(dt, "Phase starts") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		Column(dt, "Phase ends") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		Column(dt, "Phase counter") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		
+		dt << Move Selected Columns( {:Phase index, :Phase starts, :Phase ends, :Phase counter}, after( Column(itemsPhaseID[1])) );
+		
+		Column(dt, "Phase starts") << Set Modeling Type( "Ordinal" );
+		Column(dt, "Phase ends") << Set Modeling Type( "Ordinal" );
+		Column(dt, "Phase counter") << Set Modeling Type( "Ordinal" );
+		
+		//dt << Move Selected Columns( {:Phase index}, after( Column(itemsPhaseID[1])) );
+
+			
+		if(!contains(dt_col_name_list, "Aligned phase index"),
+			column_phaseID = itemsPhaseID[1];
+			
+			print("Guessing PhaseID number");
+			
+			if( nitems(itemsGrade)>=1,
+				Eval( Eval Expr( dt << new column( "Phase number (guess)",
+						Formula( Col Median( Col Cumulative Sum( :Phase starts,
+								Expr(As Name(itemsBatchID[1])) ),
+							Expr(As Name(itemsPhaseID[1])), Expr(As Name(itemsGrade[1]))))
+					)));
+				,
+				// no grades
+				Eval( Eval Expr( dt << new column( "Phase number (guess)",
+						Formula( Col Median( Col Cumulative Sum( :Phase starts,
+								Expr(As Name(itemsBatchID[1])) ),
+							Expr(As Name(itemsPhaseID[1]))))
+					)));
+			);
+			
+			print("Guessed phase number created (median value)");	
+			
+			Column(dt, "Phase number (guess)") << Set Modeling Type( "Ordinal" );
+			
+			// Metadata for formula created automatically
+			Column(dt, "Phase number (guess)") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+			
+			dt << Move Selected Columns( {Column(dt,"Phase number (guess)")}, after( Column(itemsPhaseID[1])) );
+			
+			print("Checking if phase columns is numeric");
+			phase_dtype = Column(dt, itemsPhaseID[1]) << Get Data Type;
+			show(phase_dtype);
+			
+			if(phase_dtype != "Numeric",
+				
+				print("Batch phase is not numeric, using guessed number to align data");
+	
+				print("Replacing PhaseID column by value guessed");
+				column_phaseID ="Phase number (guess)";
+			);
+			
+			print("Creating aligned phase time");
+			
+			Eval (Eval Expr(
+			dt << New Column("Aligned phase index",
+				Formula(Expr(As Name(column_phaseID)) + Expr(As Name("Phase index")) / 
+				Col Maximum( Expr(As Name("Phase index")), Expr(As Name(column_phaseID)), Expr(As Name(itemsBatchID[1])) );
+				))));	
+			
+			print("Recalculating anomaly score for batch process");
+			
+			items_grouping = {};
+			items_grouping =  items_grouping || itemsGrade;
+			
+			print("Centering Xs over the median batch curve");
+			
+			
+			for(i=1, i<= Nitems(itemsX), i++,
+				xColumn = itemsX[i];
+				xColumn_name = Char(xColumn);
+			
+				print("Calulating median batch curve and its difference for:", xColumn_name);
+			
+				//calculation = Eval Expr(xColumn_name, Num(nRows) ));
+			
+				if( nitems(itemsPhaseID)==1 & (xColumn_name != "row_index" | xColumn_name != itemsGroupWeight[1]),
+			
+				print("Phase information was given");	
+				
+				print("Grouping Y per batch");
+
+				
+				Eval( Eval Expr(
+					X << New Column( "Diff_median(" || xColumn_name || ")",
+						Numeric,
+						"Continuous",
+						Format( "Best", 12 ),
+						Formula( Abs(Expr(As Name(xColumn))- Col Median(Expr(As Name(xColumn)),
+														Round(As name("Aligned phase index"),1),
+														Expr(As Name(items_grouping[1]))))));
+					));
+				
+			);
+		);
+
+			
+		
+			print("Aggregating scores");
+			
+			print("Recalculating KNN distances");
+
+	
+			dt << Move Selected Columns( {:Aligned phase index}, after( Column(itemsPhaseID[1])) );
+			);
+		);
+	);
+	
+	print("Creating batch and phase duration if TS is given");
+	if( nitems(itemsGroupTime)>0 & nitems(itemsBatchID)>0 & !contains(dt_col_name_list, "Total batch duration"),
+
+		Eval (Eval Expr(
+		dt << New Column("Total batch duration",
+			Formula(Col Maximum( Expr(As Name(itemsGroupTime[1])), Expr(As Name(itemsBatchID[1])) )-
+				Col Minimum( Expr(As Name(itemsGroupTime[1])), Expr(As Name(itemsBatchID[1])) ))
+			);
+		));	
+		
+		// Metadata for formula created automatically
+		Column(dt, "Total batch duration") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+			
+		dt << Move Selected Columns( {:Total batch duration}, after( Column(itemsBatchID[1])) );
+		
+		Column(dt, "Total batch duration") << Format( "hr:m", 22 ) ;
+		
+		
+		Eval( Eval Expr( dt << new column( "Batch time",
+		Formula( Expr(As Name(itemsGroupTime[1])) - Col Min( Expr(As Name(itemsGroupTime[1])),
+														Expr(As Name(itemsBatchID[1]))) ))));	
+		
+		// Old implementation
+		/* Eval (Eval Expr(
+		dt << New Column("Batch time",
+			Formula(If(Expr(As Name(itemsBatchID[1])) == Lag(Expr(As Name(itemsBatchID[1])), -1),
+			Abs(Dif(Expr(As Name(itemsGroupTime[1])),-1))*(Expr(As Name("Batch index"))-1))));
+		));	*/
+		
+		// Metadata for formula created automatically
+		Column(dt, "Batch time") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		
+		dt << Move Selected Columns( {:Batch time}, after( Column(itemsBatchID[1])) );
+		
+		Column(dt, "Batch time") << Format( "hr:m", 22 ) ;
+		
+		
+		if( nitems(itemsPhaseID)>0 & !contains(dt_col_name_list, "Total phase duration"),
+		Eval (Eval Expr(
+		dt << New Column("Total phase duration",
+			Formula(Col Maximum( Expr(As Name(itemsGroupTime[1])), Expr(As Name(itemsPhaseID[1])), Expr(As Name(itemsBatchID[1])) )-
+				Col Minimum( Expr(As Name(itemsGroupTime[1])), Expr(As Name(itemsPhaseID[1])), Expr(As Name(itemsBatchID[1])) ))
+			);
+		));	
+		
+		// Metadata for formula created automatically
+		Column(dt, "Total phase duration") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		
+		dt << Move Selected Columns( {:Total phase duration}, after( Column(itemsPhaseID[1])) );
+		
+		Column(dt, "Total phase duration") << Format( "hr:m", 22 ) ;
+		
+		Eval( Eval Expr( dt << new column( "Phase time",
+		Formula( Expr(As Name(itemsGroupTime[1])) - Col Minimum( Expr(As Name(itemsGroupTime[1])),
+																	Expr(As Name(itemsPhaseID[1])),
+																	Expr(As Name(itemsBatchID[1])))
+			))));	
+		
+		// Old implementation
+		/*Eval (Eval Expr(
+		dt << New Column("Phase time",
+			Formula(If(Expr(As Name(itemsBatchID[1])) == Lag(Expr(As Name(itemsBatchID[1])), -1),
+			Abs(Dif(Expr(As Name(itemsGroupTime[1])),-1))*(Expr(As Name("Phase index"))-1))));
+		));	*/
+		
+		// Metadata for formula created automatically
+		Column(dt, "Phase time") << Set Property( "Pred_Explainer", "Pred. Explainer Formula" );
+		
+		dt << Move Selected Columns( {:Phase time}, after( Column(itemsPhaseID[1])) );
+		
+		Column(dt, "Phase time") << Format( "hr:m", 22 ) ;
+		
+		);	
+	);
+	
+	print("Creating Selected column");
+	
+	if(!contains(dt_col_name_list, "Selected"),
+			dt << New Column("Selected", Formula(Selected()));	
+				
+			Try(dt << Move Selected Columns( {:Selected}, after( Column(itemsY[1])) ));
+			
+			Column(dt, "Selected") << Set Modeling Type( "Ordinal" );
+	);
+	
+		
+	// gets naming specified by user
+	nTrees = NumberTreesBox << GetText();
+	print("number of trees selected by user:", nTrees);
+	
+	SignalToNoiseRatio = SignalToNoiseRatioBox << GetText();
+	print("Signal to noise ratio selected by user:", SignalToNoiseRatio);	
+
+	NdimUMAP = NdimUMAPBox << GetText();
+	print("Signal to noise ratio selected by user:", NdimUMAP);	
+	
+	nRows = rowdiffBox << GetText();
+	print("Number of rows to do finite differences:", nRows);	
+	
+	distance = distanceBox << GetText();
+	print("Metric distance selected by user:", distance);	
+		
+	// saves options for recall (if needed)
+	recallRoles; 
+		
+	// New data table
+	Try(Close(dt_user_parameters, "No Save" ));
+
+	dt_user_parameters = NewTable( "user_parameters" );
+
+	dt_user_parameters << NewColumn( "nTrees");	
+	dt_user_parameters << NewColumn( "SignalToNoiseRatio");
+	dt_user_parameters << NewColumn( "NdimUMAP");
+	dt_user_parameters << NewColumn( "metric");
+	dt_user_parameters << NewColumn( "nrows");
+	
+	dt_user_parameters << AddRows(
+						{:nTrees = nTrees,
+						:SignalToNoiseRatio = SignalToNoiseRatio,
+						:NdimUMAP = NdimUMAP,
+						:metric = distance,
+						:nrows	= nRows}
+						);
+	
+	// To visualize tables before saving CSV uncomment next line
+	//Throw(); // Stops execution
+	
+	// colListData << reset;
+	// colListData << NameContains (" ");
+	
+	// Configuring JMP to save CSV as commas and not 
+	
+	If( (Num( "3.14" ) == 3.14),
+		is_EN_num_format = 1, //"English numeric format"
+		is_EN_num_format = 0 //"Non-english");
+		);
+	
+	If( is_EN_num_format == 0,	
+		Preferences( Use JMP Locale Settings( 0 ) ));
+	
+	
+	// Preselection using pred-screening
+	//is_pred_screening = ("Active" == (PredScreeningBox << Get Items)[1]);
+	
+	// Checks if the target was given to skip it
+	if( nitems(itemsY)>0,// & is_pred_screening, 
+		DataTable(X);
+	// Creating X features
+	// https://community.jmp.com/t5/JSL-Cookbook/Insert-one-expression-into-another-using-Eval-Insert-Eval-Expr/ta-p/48998
+
+	
+	// Number of rows selected for differences or lags
+	n_rows_diff = Num(nRows);
+	
+	// Number of columns (Xs) selected by user
+	n_itemsX = N items(itemsX);
+	
+	DiffsCheckbox = CheckBoxDifferences << Get();
+
+	// Calculates features
+	if(DiffsCheckbox==1,
+		for(i=2, i<= n_itemsX, i++,
+			xColumn = itemsX[i];
+			xColumn_name = Char(xColumn);
+			
+			print("Calulating diff for:", xColumn_name);
+			
+			//calculation = Eval Expr(xColumn_name, Num(nRows) ));
+			
+			if( nitems(itemsBatchID)==0 & (xColumn_name != "row_index" | xColumn_name != itemsGroupWeight[1]),
+			
+				print("Continous process, calculating diffs");	
+				
+				Eval( Eval Expr(
+					X << New Column( "Diff(" || xColumn_name || ")",
+						Numeric,
+						"Continuous",
+						Format( "Best", 12 ),
+						Formula( Dif(Expr(As Name(xColumn)), Expr(n_rows_diff))));
+					));
+				,
+				nitems(itemsBatchID)>=1 & DiffsCheckbox==1,
+				print("Continous process, calculating diffs per batch");	
+					BatchColumn = ItemsBatchID[1];
+				Eval( Eval Expr(
+					X << New Column( "Diff(" || xColumn_name || ")",
+						Numeric,
+						"Continuous",
+						Format( "Best", 12 ),
+						Formula(If(Expr(As Name(BatchColumn)) == Lag(Expr(As Name(BatchColumn)),
+							Expr(n_rows_diff)), Dif(Expr(As Name(xColumn)), Expr(n_rows_diff)))
+							)
+						);
+					));
+				
+			);
+		);
+	);
+
+	
+	// Including Y in X
+	
+
+	print("Including y target in Xs to run Pred. Screening");
+		X << Update(
+			With( Y ),
+			Match Columns( :row_index = :row_index ),
+			Add Columns from Update Table( itemsY[1])
+		);
+
+
+	print("Creating random inputs");
+	
+	// New formula column: Random Uniform
+
+	X << New Column( "Random Uniform",
+		Numeric,
+		"Continuous",
+		Format( "Best", 12 ),
+		Formula( Random Uniform() )
+		) << Move Selected Columns( {:Random Uniform}, after( Column(itemsY[1])) );
+
+
+	// New formula column: Random Normal
+	X << New Column( "Random Normal",
+		Numeric,
+		"Continuous",
+		Format( "Best", 12 ),
+		Formula( Random Normal() )
+	) << Move Selected Columns( {:Random Normal}, after( Column(itemsY[1])) );
+	
+	// TODO Shuffling target variable seems to dominate if filter is applied
+	// This might be due to a bug or a very aggressive approach to remove factors
+	// that are better than normal or uniform noise
+	
+	is_target_random_input = 0;
+	
+	if( is_target_random_input,
+
+	// New formula column: Shuffle[target]
+	Eval( Eval Expr(
+			X << New Column( "Random Y",
+			Numeric,
+			"Continuous",
+			Format( "Best", 12 ),
+			Formula( Expr(As Name( itemsY[1]))[Col Shuffle()] )
+	)));
+	
+	//<< Move Selected Columns( {:Random Y}, after( Column(itemsY[1])) );
+	
+	Column(X, "Random Y") << Delete Formula;
+	);
+	
+	
+	// TODO time features are not created in X
+	// Transformed in into python time (above) has issues
+	/*print("Creating datetime features");
+	
+	if(itemsGroupTime>=1,
+
+		print("Including y target in Xs to run Pred. Screening");
+		X << Update(
+			With( t ),
+			Match Columns( :row_index = :row_index ),
+			Add Columns from Update Table( itemsGroupTime[1])
+		);
+		
+		print("Creating datetime features");
+		user_datetime = itemsGroupTime[1];
+			
+		// New formula column: Date[datetime_column]
+		Eval( Eval Expr(
+		X << New Column( "Date",
+		Numeric,
+		"Continuous",
+		Format( "y/m/d", 22 ),
+		Input Format( "y/m/d" ),
+		Formula( Expr(As Name(user_datetime)) - Time Of Day( Expr(As Name(user_datetime)) ) )
+		);
+		));
+
+
+		// New formula column: Time of Day[date2]
+		Eval( Eval Expr(
+		X << New Column( "Time of Day",
+			Numeric,
+			"Continuous",
+			Format( "h:m:s", 22, 0 ),
+			Input Format( "h:m:s", 0 ),
+			Formula( Time Of Day( Expr(As Name(user_datetime)) ) )); 
+		));
+
+		// New formula column: Month Year[date2]
+		Eval( Eval Expr(
+		X << New Column( "Month Year",
+			Numeric,
+			"Ordinal",
+			Format( "m/y", 22 ),
+			Input Format( "m/y" ),
+			Formula( Date DMY( 1, Month( Expr(As Name(user_datetime))), Year( Expr(As Name(user_datetime)) ) ) ));
+		)); 
+
+
+		// New formula column: Year Quarter[date2]
+		Eval( Eval Expr(
+		X << New Column( "Year Quarter",
+			Numeric,
+			"Continuous",
+			Format( "yyyyQq", 22 ),
+			Input Format( "yyyyQq" ),
+			Formula(
+				Date DMY( 1, Floor( (Month( Expr(As Name(user_datetime)) ) - 1) / 3 ) * 3 + 1, Year( Expr(As Name(user_datetime)) ) )
+			));
+		));
+	);*/
+	
+	print("Feature generation finished");
+		
+	itemsX_rich =  X << Get Column Names(string);
+	
+	print("Removing row index from grouping variables");
+	Remove From(itemsX_rich, As List( Loc(itemsX_rich, "row_index")));
+	
+	print("Removing Y from input list after creating shuffle");
+	Remove From(itemsX_rich, As List( Loc(itemsX_rich, itemsY[1])));
+	
+	print("Removing W from input list if given");
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, itemsGroupWeight[1]))));
+	
+	print("Removing T from input list if given");
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich,  itemsGroupTime[1]))));
+	
+	print("Removing Z from input list if given");
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich,  itemsGroupZ[1]))));
+	
+	print("Removing Grade, BatchID and PhaseID");
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, ItemsGrade[1]))));
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, ItemsBatchID[1]))));
+	Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, ItemsPhaseID[1]))));	
+	
+		
+	show(itemsY);
+	show(itemsX_rich);
+	
+	
+	
+	// Summarizing warns user when many columns are about to be created
+	// Hiding temp tables for user
+	
+	try(X << Show Window( 0 ));
+	try(y << Show Window( 0 ));
+	try(t << Show Window( 0 ));
+	try(Z << Show Window( 0 ));
+	try(W << Show Window( 0 ));
+	try(dt_user_parameters << Show Window( 0 ));
+	
+	try(Grades << Show Window( 0 ));
+	try(BatchIDs << Show Window( 0 ));
+	try(PhaseIDs << Show Window( 0 ));
+	
+	
+	
+	
+	// Summarizing table only if batch ID is provided
+	// a.k.a generating fingerprints
+	if(nitems(itemsBatchID)>=1,
+		
+		// Starts empty list and add elements if they exist
+		batch_group_columns = list();	
+		try(Insert Into(batch_group_columns, Column(X, ItemsGrade[1])));
+		try(Insert Into(batch_group_columns, Column(X, ItemsBatchID[1])));
+		
+		// Starts empty list and add elements if they exist
+		batch_subgroup_columns = list();	
+		try(Insert Into(batch_subgroup_columns, Column(X, ItemsPhaseID[1])));
+		
+		
+		// Getting weight column if exisiting
+		Weight_group_column = "None";
+		Try(Weight_group_column = Column(X, itemsGroupWeight[1]););
+		
+		show(Weight_group_column);
+		
+
+		// List of summary statistics
+		
+		/*list_statistics = {"Mean()", "Std Dev()", "Max"(), "Min"(),
+		"Range()", "Sum()", "Median()", "Median Absolute Deviation()", "Interquartile Range()", "Quantile(90,)" };*/
+		
+		print("Summarizing statistics");
+				
+		X_groupedby = X<< Summary(
+							Group( batch_group_columns ),
+							Subgroup( batch_subgroup_columns ),
+								//Mean(itemsY[1]), // mean of target function per phase
+								Mean(itemsX_rich),
+								Std Dev(itemsX_rich),
+								Max(itemsX_rich),
+								Min(itemsX_rich),
+								Sum(itemsX_rich),
+								Range(itemsX_rich),	
+								CV(itemsX_rich),
+							Freq( "None" ),
+							Weight( Weight_group_column ),
+							statistics column name format( "stat of column" ),
+							Link to original data table( 0 )
+							);			
+		
+		// BUG? inogres weight if robust statistics are used
+		// https://community.jmp.com/t5/Discussions/Summary-table-ignoring-weight-column-in-specific-conditions-bug/td-p/423170					
+		
+		//Throw();
+		
+		// List of X columns to update the summarized table with
+		X_update_columns = {Column(X, "row_index")};
+		try(Insert Into(X_update_columns, Column(X, itemsY[1])));
+		try(Insert Into(X_update_columns, Column(X, itemsGroupTime[1])));
+		
+		show(X_update_columns);
+								
+		/*	Y_groupedby = X<< Summary(
+							Group( batch_group_columns),
+								Mean(itemsY[1]), 	
+							Freq( "None" ),
+							Weight( "None" )
+							);*/
+							
+		
+		print("Calcualting start and duration for batches and phases, if given.");
+		
+		if(NItems(itemsGroupTime)>=1,
+					X_subtimers = X << Summary(
+						Group( batch_group_columns ),
+						Min( itemsGroupTime[1] ),
+						Range( itemsGroupTime[1] ),
+						Subgroup( batch_subgroup_columns ),
+						Freq( "None" ),
+						Weight( Weight_group_column ),
+						statistics column name format( "stat of column" ),
+						Link to original data table( 0 )
+				);
+			
+			print("Renaming columns for clarity");	
+			X_subtimers_colnames = X_subtimers << Get Column Names(String);
+			//X_subtimers_colnames_new = {};
+			
+			columns_with_start_time = {};
+			columns_with_duration_time = {};
+				
+			for(i=1, i <= Nitems(X_subtimers_colnames), i++,
+				colname = X_subtimers_colnames[i];
+				show(colname);
+				if(Contains(colname, "Min of")>=1, 
+					colname = Substitute ( colname, "Min of "||Char(itemsGroupTime[1]), "Start" );
+					Insert into(columns_with_start_time, colname)
+				);
+				
+				if(Contains(colname, "Range of")>=1, 
+					colname = Substitute ( colname, "Range of "||Char(itemsGroupTime[1]), "Duration" );
+					Insert into(columns_with_duration_time, colname)
+				);
+
+				show(colname);
+				Column(X_subtimers, X_subtimers_colnames[i]) << Set Name(colname);
+				
+				//if(colname_new != colname, Insert Into(X_subtimers_colnames_new, colname_new));
+			);
+			X_subtimers_colnames_new = X_subtimers << Get Column Names(String);
+			
+			show(X_subtimers_colnames_new);
+			
+			show(columns_with_start_time);
+			
+			show(columns_with_duration_time);
+		);
+		
+		if(NItems(itemsGroupZ)>=1,
+					X_subzs = X << Summary(
+						Group( batch_group_columns ),
+						Mean( itemsGroupZ[1] ),
+						Subgroup( batch_subgroup_columns ),
+						Freq( "None" ),
+						Weight( Weight_group_column ),
+						statistics column name format( "stat of column" ),
+						Link to original data table( 0 )
+				);
+			X_subzs_colnames = X_subzs << Get Column Names(String);
+		);
+		
+		// Include target in summary table
+		print("Updating summarized table with 'y' (target column) and :row_index");
+		
+		if( NItems(itemsGrade)>=1,
+		
+			// Update data tables
+			X_groupedby = X_groupedby << Update(
+				With( X ),
+				Match Columns( itemsGrade[1] =  itemsGrade[1],
+								 itemsBatchID[1] = itemsBatchID[1]),
+				Add Columns from Update Table( Eval Expr(X_update_columns) ),
+				Replace Columns in Main Table( None )
+			);
+			
+
+			if(NItems(itemsGroupTime)>=1,
+			
+			// Update data table with supplementary info
+			print("Updating summarized table time calculations");
+				X_groupedby = X_groupedby << Update(
+					With( X_subtimers ),
+					Match Columns( itemsGrade[1] =  itemsGrade[1],
+									 itemsBatchID[1] = itemsBatchID[1]),
+					Add Columns from Update Table( Eval Expr(X_subtimers_colnames_new) ),
+					Replace Columns in Main Table( None )
+				);
+				
+				Close(X_subtimers, nosave);
+			);
+			
+			if(NItems(itemsGroupZ)>=1,
+			
+			// Update data table with start and duration
+			print("Updating summarized Z calculations");
+				X_groupedby = X_groupedby << Update(
+					With( X_subzs ),
+					Match Columns( itemsGrade[1] =  itemsGrade[1],
+									 itemsBatchID[1] = itemsBatchID[1]),
+					Add Columns from Update Table( Eval Expr(X_subzs_colnames) ),
+					Replace Columns in Main Table( None )
+				);
+				
+				Close(X_subzs, nosave);
+			);
+			
+			,
+			// Only match by Batch
+			X_groupedby = X_groupedby << Update(
+				With( X ),
+				Match Columns( itemsBatchID[1] = itemsBatchID[1] ),
+				Add Columns from Update Table( Eval Expr(X_update_columns) ),
+				Replace Columns in Main Table( None )
+			);
+			
+			if(NItems(itemsGroupTime)>=1,
+			// Update data table with start and duruation
+			print("Updating summarized table time calculations");
+				X_groupedby = X_groupedby << Update(
+					With( X_subtimers ),
+					Match Columns( itemsBatchID[1] = itemsBatchID[1]),
+					Add Columns from Update Table( Eval Expr(X_subtimers_colnames_new) ),
+					Replace Columns in Main Table( None )
+				);
+			
+			Close(X_subtimers, nosave);
+				
+			);
+			
+			if(NItems(itemsGroupZ)>=1,
+			
+			// Update data table with start and duration
+			print("Updating summarized tab Z calculations");
+				X_groupedby = X_groupedby << Update(
+					With( X_subzs ),
+					Match Columns( itemsBatchID[1] = itemsBatchID[1]),
+					Add Columns from Update Table( Eval Expr(X_subzs_colnames) ),
+					Replace Columns in Main Table( None )
+				);
+				
+				Close(X_subzs, nosave);
+			);
+			
+		);	
+		
+		//throw(); //debugging 
+		print("Setting summarized table (fingerprints) for predictor screening");
+		
+		print("Moving y to the beggining of the summarized table");	
+		
+		Try(
+			X_groupedby << Go to(itemsY[1]);
+			X_groupedby << Move Selected Columns(After(Column("N Rows")));
+			X_groupedby << Clear Column Selection();
+		);
+		
+		
+		print("Closing table with high sampling data");
+		
+		//Close(X, nosave); // Also closes the summary table
+		
+		itemsX_rich =  X_groupedby << Get Column Names(string);
+		
+		print("Removing Y from input list after creating shuffle");
+		Remove From(itemsX_rich, As List( Loc(itemsX_rich, itemsY[1])));
+		
+		print("Removing row index from grouping variables");
+		Remove From(itemsX_rich, As List( Loc(itemsX_rich, "row_index")));
+		
+		print("Removing time index from grouping variables");
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, itemsGroupTime[1]))));
+		
+		print("Removing Z index from grouping variables");
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, itemsGroupZ[1]))));
+		
+		print("Removing Grade, BatchID and PhaseID");
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, ItemsGrade[1]))));
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, ItemsBatchID[1]))));
+		
+		print("Removing N Rows column from summary");
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, "N Rows"))));
+		
+		print("Removing date time columns (start, duration, etc)");
+		For( i = 1, i <= N Items(X_subtimers_colnames_new), i++,
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, X_subtimers_colnames_new[i]))));
+		);
+		
+		print("Removing Z group by columns)");
+		For( i = 1, i <= N Items(X_subzs_colnames), i++,
+		Try(Remove From(itemsX_rich, As List( Loc(itemsX_rich, X_subzs_colnames[i]))));
+		);
+		
+		
+		show(itemsX_rich);
+		
+
+		
+
+		
+		Y_groupedby = X<< Summary(
+							Group( batch_group_columns ),
+								Mean(itemsY[1]), // mean of target function per phase
+								StdDev(itemsY[1]), // std of target function per phase
+							Freq( "None" ),
+							Weight( Weight_group_column ),
+							statistics column name format( "stat of column" ),
+							Link to original data table( 0 )
+							);	
+		
+				
+		
+
+		
+		// Adding row_index to aggregated data
+		print("interchanging X and Y by summary tables (fingerprints)");
+				
+	
+		// Duplicates unlinking X and X Grouped
+		X_groupedby_copy = Eval(X_groupedby << getScript);
+		Close(X_groupedby , nosave);
+		Close(X, nosave);
+		
+		
+		// Sustitutes X by X with summaries (fingerprints)
+		X = X_groupedby_copy;
+		X << Set Name("[X] Fingerprints (batch summary)");
+		
+		// Redifines Y in case a batch process was analysed (new X)
+		try(close(y, nosave));
+		show(itemsY[1]);
+		
+		y =	X << Subset( All rows,
+			columns( itemsY[1] ));
+	
+		y_grouped = Column(X, itemsY[1]);
+		
+		y << Set Name("Y");
+	);	
+	
+	
+
+	
+	// Launch Predictor Screening
+	obj_screening = X << Predictor Screening(
+			Y( Eval(itemsY[1])),
+			X( Eval(itemsX_rich))
+			);
+		
+	// JSL does not allow to specify the number of trees in Pred. Screening
+	
+	dt_screening = Report(obj_screening)[TableBox(1)] << makeDataTable;
+	dt_screening << Set Name("Predictor screening results");
+		
+	
+	print("Selecting top contributions base on noise cut");
+	
+	
+	
+	predictor_list = Column(dt_screening, "Predictor") << Get Values();
+	show(predictor_list);
+	
+	print("Show results from pred. screening");
+	obj_screening << Set Visible( 1 );
+	// obj_screening << Bring Window To Front;
+	
+	
+	// Contains does not work if name in column is partial
+	/*index_normal = Contains(predictor_list, "Random Normal");
+	show(index_normal);
+	
+	index_uniform = Contains(predictor_list, "Random Uniform");
+	show(index_normal);
+	
+	index_shuffle = Contains(predictor_list, "Random Y");
+	show(index_normal);
+	
+	index_noise_min = Min(index_normal, index_uniform, index_shuffle);
+	show(index_noise_min);*/
+	
+	index_noise_min = 0;
+	
+	print("Searching for predictors that have name 'Random'");
+	
+	For( i = 1, i <= N Items(predictor_list), i++,
+		text_patern_search = Regex(Char(predictor_list[i]), "Random", "TRUE");
+		
+		if(text_patern_search=="TRUE",
+			index_noise_min = i;
+			show(index_noise_min);
+			print("First predictor with synthetic noise", predictor_list[i]);
+			index_noise_column = predictor_list[i];
+			Break();
+		);
+
+	);
+
+	// In case noise variables are not found
+	if(index_noise_min ==0,
+		index_noise_min == NRows(dt);
+		print("Index noise not found, reseting it to:", index_noise_min);
+		);
+	
+	// Minimum contribution in case noise is 0
+	
+	contribution_eps = 1e-6; // done in the GUI already
+	
+	show(index_noise_min);
+	
+	contribution_min = dt_screening:Contribution[index_noise_min];
+	show(contribution_min);
+	
+	contribution_cut = (contribution_eps + contribution_min)*Num(SignalToNoiseRatio);
+	show(contribution_cut);
+	
+	noisy_indexes = dt_screening << Get Rows Where( :Contribution < contribution_cut );
+	signal_indexes = dt_screening << Get Rows Where( :Contribution >= contribution_cut );
+	
+	if(N Items(noisy_indexes)!=0, 
+		noisy_predictor_list = predictor_list[noisy_indexes];,
+		print("Noise to signal ratio low, no columns to be removed");
+		noisy_predictor_list = List();
+	);
+	
+	if(N Items(signal_indexes)==0,
+		print("Noise to signal ratio too high, no columns to be kept except noise");
+		signal_indexes = dt_screening << Get Rows Where( :Contribution >= contribution_min );
+		noisy_indexes = dt_screening << Get Rows Where( :Contribution < contribution_min );
+	);
+
+	predictor_list = predictor_list[signal_indexes];
+	
+	print("Getting original tagnames");
+	
+	ungrouped_tag_names_predictor_list = {}; // cleaned predictor list;
+	
+	For( i = 1, i < N items(predictor_list), i=i+1,
+		predictor_tagname = predictor_list[i];
+		show(predictor_tagname);
+		
+		
+		statistic_of_str = (Left(predictor_tagname, Contains(predictor_tagname, "of")+2));
+		predictor_clean_tagname = Substitute(predictor_tagname, statistic_of_str, "");
+		
+		if(nitems(itemsPhaseID)>0,
+			// removes subgrouping
+			// todo add IF in case phase ID is given
+			predictor_clean_tagname = Left(predictor_clean_tagname, Contains(predictor_clean_tagname,", ")-1);
+			show(predictor_clean_tagname);
+			Insert Into(ungrouped_tag_names_predictor_list, predictor_clean_tagname);
+		)
+	);
+	
+	show(ungrouped_tag_names_predictor_list);
+	
+	
+	// Keeps row_index column
+	Try(Remove From(noisy_predictor_list, As List( Loc(noisy_predictor_list, "row_index"))));
+	
+	print("These columns were found nearby noise (noise cut)");
+	show(noisy_predictor_list);
+	
+	print("Keeping noise input for baseline reference");
+	//show(index_noise_column);
+	Try(Remove From(noisy_predictor_list, As List( Loc(noisy_predictor_list, index_noise_column))));
+	
+	print("Supressing formula evaluation for all feautres (generated columns)");
+	
+	Try(X << Suppress Formula Eval( 1 ));
+	
+	print("Removing formulas from user selection");
+	For( i = 1, i < N items(noisy_predictor_list), i=i+1,
+		noisy_predictor_tagname = noisy_predictor_list[i];
+		print("Removing formula column:", noisy_predictor_list[i] );
+		Try(Column(X, Eval(noisy_predictor_tagname))<<Delete Formula);
+	);
+
+	print("Removing columns from user selection");
+	
+	Try(X << Suppress Formula Eval( 1 ));
+	Try(X << Delete Columns( Eval(noisy_predictor_list) ));
+	Try(X << Suppress Formula Eval( 0 ));
+	
+	print("These will be kept");
+	show(X << Get Column Names(string));
+	
+	print("Reorganizing predictors in order of priority");
+	For( i = NRows(signal_indexes), i>=1, i=i-1,
+		signal_column_name = dt_screening:Predictor[i];
+		print("Moving column: ", signal_column_name);
+		signal_column = Column(X, signal_column_name);
+		X << Select Columns(signal_column);
+		X << Move Selected Columns(To First);
+			//X << Select Columns(signal_column);
+		);
+		
+	print("Moving batch, grade, and target to first column if provided");
+	
+	Try(X << Select Columns(Column(X,itemsGroupZ[1])) << Move Selected Columns(To First));
+	Try(X << Select Columns(Column(X,itemsGroupTime[1])) << Move Selected Columns(To First));
+	Try(X << Select Columns(Column(X,itemsY[1])) << Move Selected Columns(To First));
+	Try(X << Select Columns(Column(X,ItemsBatchID[1])) << Move Selected Columns(To First));
+	Try(X << Select Columns(Column(X,ItemsGrade[1])) << Move Selected Columns(To First));
+	
+	
+	print("Plotting trop predictors in parallel coordinate plot");
+	
+	filter_columns = {};
+	try(Insert Into(filter_columns, Column(X, itemsY[1])));
+	try(Insert Into(filter_columns, Column(X, itemsGroupTime[1])));
+	try(Insert Into(filter_columns, Column(X, itemsGroupZ[1])));
+	try(Insert Into(filter_columns, Column(X, ItemsGrade[1])));
+	try(Insert Into(filter_columns, Column(dt, ItemsPhaseID[1])));
+	//try(Insert Into(filter_columns, Column(X, ItemsBatchID[1])));
+	
+	show(filter_columns);
+	
+	index_columns = {};
+	try(Insert Into(index_columns, Column(X, itemsGroupTime[1])));
+	try(Insert Into(index_columns, Column(X, "row_index")));
+	
+	show(index_columns);
+	
+	show(predictor_list);
+
+	if(NItems(predictor_list)>=3,
+
+		obj_parallel_plot = X <<Graph Builder(
+			Size( 1015, 628 ),
+			Show Control Panel( 0 ),
+			Variables(
+				X( itemsY[1] ),
+				X( predictor_list[1], Position( 1 ) ),
+				X( predictor_list[2], Position( 1 ) ),
+				X( predictor_list[3], Position( 1 ) ),
+				X( index_columns[1],  Position( 1 )),
+				Color( itemsY[1] ),
+				Size( itemsY[1] )
+				),
+			Elements( Parallel( X( 1 ), X( 2 ), X( 3 ), X( 4 ), X(5), Legend( 2 ) ) ),
+			Local Data Filter(
+				Add Filter(
+					columns( Eval Expr(filter_columns) )
+					)
+			)
+		);
+	);
+	
+
+	
+	print("Plotting batch trends, if batch data was given");
+	
+	// TODO
+	
+	// Diff() columns are not in main table, they need to be calculated manually
+	// it can happen that those are in the list for plotting
+	// making the graph fail
+	
+	show(ungrouped_tag_names_predictor_list);
+
+	
+	if(N items(ItemsBatchID)>0 & N items(ungrouped_tag_names_predictor_list)>0,// & N items(itemsGroupTime)>0,
+	
+		
+		X_batch_plot = Column(dt, "Batch index");
+		
+		// Uses batch time as X if exists (needs datetime)
+		if( try(Column(dt,"Batch time") << get name, "error" ) == "Batch time",
+			X_batch_plot  = Column(dt, "Batch time");
+			
+		);
+	
+		Try(
+		obj_batch_plot = dt << Graph Builder(
+			Size( 920, 636 ),
+			Show Control Panel( 0 ),
+			Variables(
+				X( X_batch_plot ),
+				X( :Aligned phase index ),
+				Y( ungrouped_tag_names_predictor_list[1] ),
+				Overlay( ItemsBatchID[1] ),
+				Color( itemsY[1] )
+			),
+			Elements( Position( 1, 1 ), Line( X, Y, Legend( 9 ) ) ),
+			Elements( Position( 2, 1 ), Line( X, Y, Legend( 11 )),  ),
+			Local Data Filter(
+				Add Filter(
+					columns( Eval Expr(filter_columns))
+				)
+			),
+			Column Switcher(
+				ungrouped_tag_names_predictor_list[1],
+				ungrouped_tag_names_predictor_list
+			),
+			SendToReport(
+				Dispatch( {}, "400", LegendBox, {Legend Position( {9, [0], 11, [-1]} )} )
+			)
+		));
+
+	);
+	
+	Try(Close( dt_screening, NoSave ));	
+	
+	// Not closing pred screening window in case Python fails
+	// obj_screening << Close Window();
+	); // Preselection finished (Y was given)
+	
+	print("Finished pre-filtering inputs with pred. screening");
+	
+	print("Grouping start and duration columns if given");
+	Try(X<< Group Columns("Starting times", columns_with_start_time));
+	Try(X<< Group Columns("Duration",columns_with_duration_time));
+
+		
+	try(X << Show Window( 0 ));
+	try(y << Show Window( 0 ));
+	try(t << Show Window( 0 ));
+	try(Z << Show Window( 0 ));
+	try(W << Show Window( 0 ));
+	try(dt_user_parameters << Show Window( 0 ));
+	
+	try(Grades << Show Window( 0 ));
+	try(BatchIDs << Show Window( 0 ));
+	try(PhaseIDs << Show Window( 0 ));
+	
+	
+	Try(obj_parallel_plot << Bring Window To Front);
+	Try(obj_batch_plot << Bring Window To Front);
+	Try(obj_screening << Bring Window To Front);
+
+	Wait(0); //shows Pred. Screening to user
+	
+	if(N Items(X << Get Column Names(string)) <= 2,
+		print("limited number of X pre-selected");
+		// row_index column will be always in X
+		Try(Close( y, NoSave ));
+		Try(Close( X, NoSave ));
+		Try(Close( t, NoSave ));
+		Try(Close( Z, NoSave ));
+		Try(Close( W, NoSave ));
+		Try(Close(dt_user_parameters, NoSave));
+		Try(Close( Grades, NoSave ));
+		Try(Close( BatchIDs, NoSave ));
+		Try(Close( PhaseIDs, NoSave ));
+
+		//obj_screening <<  s;
+		Throw("X does not contain predictors after noise cut, try to reduce the signal-to-noise parameter.")
+		
+		);
+	
+
+	is_Python_checkbox_active = CheckBoxPython << Get();
+	
+	show(is_Python_checkbox_active);
+	show(is_python_installed);
+		
+	if(is_Python_checkbox_active == 0 | is_python_installed == 0,
+		
+		print("Python analysis won't be executed");
+		print("To activate this option please install PyJMP: https://github.com/industrial-data/pyJMP");
+		Try(Close( y, NoSave ));
+		
+		// Closing X also closes Pred. Screening window
+		//Try(Close( X, NoSave ));
+	
+		Try(Close( t, NoSave ));
+		Try(Close( Z, NoSave ));
+		Try(Close( W, NoSave ));
+		Try(Close(dt_user_parameters, NoSave));
+		
+		Try(Close( Grades, NoSave ));
+		Try(Close( BatchIDs, NoSave ));
+		Try(Close( PhaseIDs, NoSave ));
+		
+		//obj_screening <<  s;
+		Throw();
+		);
+
+
+	// Exporting tables to CSV
+	Try(DeleteFile("$temp\y.csv"));
+	
+	// If user has not selected Y columns, the problem will be treated as unsupervised)
+	if( nitems(itemsY)>0 & is_unsupervised==0,
+		print("Saving Y as csv");
+		//Throw();
+		y << SaveAs( "$temp\y.csv" );
+		//Try(Close( y, NoSave ));
+		);
+	
+	Try(DeleteFile("$temp\X.csv"));
+	
+	// Deletes targt column from X (needed to continue analysis in Python)
+	Try(X << Delete Columns( itemsY[1] ));
+	
+	// Deletes N_Rows from batch info (bug?)
+	try(X << Delete( Column(X, "N_Rows" )));
+	
+	// Removing N_rows column created when summarizing table
+	if(nitems(itemsBatchID)>=1,
+		try(X << Delete( Column(X, "N Rows" )));
+		try(X << Delete( Column(X, "N_Rows" )));
+		
+		if(N Items(itemsGroupTime)>=1,
+			print("Removing date time columns (start, duration, etc)");
+			For( i = 1, i <= N Items(X_subtimers_colnames_new), i++,
+				Try(X << Delete( Column(X, X_subtimers_colnames_new[i] )));
+			);
+			Try(X << Delete( Column(X, itemsGroupTime[1] )));
+		);
+		
+		Try(X << Delete( Column(X, X_subzs_colnames[1] )));
+		Try(X << Delete( Column(X, itemsGroupZ[1] )));	
+	);
+	
+	Try(X << Delete( Column(X, itemsGroupZ[1] )));
+	
+	print("Saving Xs as csv");
+	X << SaveAs( "$temp\X.csv" );
+	//Try(Close( X, NoSave ));
+	
+	Try(DeleteFile("$temp\user_parameters.csv"));
+	dt_user_parameters << SaveAs( "$temp\user_parameters.csv" );
+	//Try(Close(dt_user_parameters, NoSave));
+	
+	
+	Try(DeleteFile("$temp\t.csv"));
+	if( !isEmpty(t), t << SaveAs( "$temp\t.csv" ) ); 
+	//Try(Close( t, NoSave ));
+	
+	Try(DeleteFile("$temp\Z.csv"));
+	if( !isEmpty(Z), Z << SaveAs( "$temp\Z.csv" ) ); 
+	//Try(Close( t, NoSave ));
+	
+	Try(DeleteFile("$temp\W.csv"));
+	if( !isEmpty(W), W << SaveAs( "$temp\W.csv" )); 
+	//Try(Close( W, NoSave ));		
+	
+	
+	Try(DeleteFile("$temp\Grades.csv"));
+	if( !isEmpty(Grades), Grades << SaveAs( "$temp\Grades.csv" )); 
+	
+	Try(DeleteFile("$temp\BatchIDs.csv"));
+	if( !isEmpty(BatchIDs), BatchIDs << SaveAs( "$temp\BatchIDs.csv" )); 
+	
+	Try(DeleteFile("$temp\PhaseIDs.csv"));
+	if( !isEmpty(PhaseIDs), PhaseIDs << SaveAs( "$temp\PhaseIDs.csv" )); 	
+
+	
+/*	// Update data tables
+		dt << Update(
+			With( X ),
+			Match Columns( :row_index = :row_index ),
+			Add Columns from Update Table(
+				:"Diff(TempC1)"n, :"Diff(FlowC1)"n, :"Diff(Temp2)"n
+			)
+		);*/
+	
+
+	
+	// Python is called trough a .bat file
+	// Self generating BAT file to remove depenencies
+	
+	// (!) Important Notebook needs to be distributed with the addin
+	
+	// Do NOT modify BAT text from JMP editor
+	// https://community.jmp.com/t5/Discussions/JSL-Saving-txt-files-with-Windows-end-of-line-EOL-CRLF/td-p/339509
+	run_notebook_bat = "\[@ECHO OFF                              
+:: author = Francisco Navarro (@franktoffel)
+:: URL = https://github.com/industrial-data/predictor-explainer
+:: License = BSD-Clause 3
+set JMP_PYTHON_PTH=C:\ProgramData\miniforge_JMP
+CALL %JMP_PYTHON_PTH%\Scripts\activate.bat %JMP_PYTHON_PTH%
+SET current_path=%~dp0
+echo %current_path:~0,-1%
+SET notebook_file=jmp_addin_minimum_features.ipynb
+SET notebook_file_path=%current_path%%notebook_file%
+echo %notebook_file_path%
+start /wait /B  ""  jupyter nbconvert --execute --to notebook --inplace %notebook_file_path%]\";
+//start /wait /B  ""  jupyter nbconvert --execute --to html %notebook_file_path%]\";
+
+// Add the line above if you want to save notebook as HTML
+	
+	//run_notebook_bat = substitute(run_notebook_bat, "jmp_addin_minimum_features_v20113", "jmp_addin_minimum_features");
+	
+	addin_path = "$ADDIN_HOME(Predictor_Explainer)";
+	
+	bat_path = ConvertFilePath( addin_path || "/run_notebook.bat", windows);
+	
+	saveTextFile( bat_path, run_notebook_bat );
+	
+	username = GetEnvironmentVariable("Username");
+	
+	//desktop_path = GetPathVariable( "HOME" );
+	
+	// Old version, notebook should be in another folder
+	//bat_path = ConvertFilePath( "C:/Users/"|| username || "/miniconda_JMP/jmp15/run_notebook.bat", windows);
+	
+	Try(Close(dt_user_parameters, "No Save" )); //already saved as csv
+	
+	Try(obj_screening << Bring Window To Front);
+	
+	// Deletes previous Python execution check file
+	Try(DeleteFile("$temp\python_execution.csv"));
+	rp = RunProgram( Executable( "cmd.exe" ),
+		Options( {"/C", bat_path} ),
+		ReadFunction("text") // returns all text	
+		);
+	
+	// Checks that Python was executed correctly
+	if(FileExists( "$temp\python_execution.csv" ),
+		// True
+		show("Python Notebook code exectued correctly"),
+		// False
+		ErrorWindow =  NewWindow("Error", <<Modal, <<Return Result,
+				  Textbox(":/ \!N Something went wrong during the Python execution... \!N Please try to run the notebook directly from the folder"),
+				  cb = CheckBox( {"Debug"}, cb << Get)
+				  );
+		if(ErrorWindow["cb"] == {1},
+			//Debug mode active
+			show("starting debug mode");
+			//Open("$temp");
+			NewWindow("Debugging mode", <<Modal, TextBox("Open and rerun the notebook to see where it failed"));
+			OpenNotebook(""); // Calls function to open folder
+			Throw();, // stops execution
+			// Skips debugging
+			show("Closing temporary tables, trying to plot data");
+			);
+	
+		);
+
+	// Loading CSV with results
+	
+	Try(Close(dt_global_shap_values, "No Save" ));
+	dt_global_shap_values = Open( "$temp\df_global_shap_values.csv", "invisible" );
+	
+	Try(Close(dt_shap_values, "No Save" ));
+	dt_shap_values = Open( "$temp\df_shap_values.csv", "invisible"  );
+	
+	Try(Close(dt_shap_plot_table, "No Save" ));
+	dt_shap_plot_table = Open( "$temp\df_shap_plot_table.csv", "invisible" );
+	
+	// Setting back the formatting of numbers to its original
+	If( is_EN_num_format == 0,	
+	Preferences( Use JMP Locale Settings( 1 ) ));
+		
+	// For debugging, uncomment these to unhide these tables 
+	// dt_shap_plot_table << ShowWindow( 1 );
+	// dt_shap_values << ShowWindow( 1 );
+	// dt_global_shap_values << ShowWindow( 1 );
+
+	//Show(y);
+	Try(Close( y, NoSave ));
+	Try(Close( X, NoSave ));
+	Try(Close( t, NoSave ));
+	Try(Close( W, NoSave ));
+	Try(Close(dt_user_parameters, NoSave));
+	
+	Try(Close( Grades, NoSave ));
+	Try(Close( BatchIDs, NoSave ));
+	Try(Close( PhaseIDs, NoSave ));
+	
+	//dt_shap_values << New Data View;
+	//dt_global_shap_values << New Data View;
+	//dt_shap_plot_table << New Data View;
+		
+	// Virtual join with interactive link bt datatbles
+	
+	dt_index = Column(dt, "row_index");
+	dt_shap_values_index = Column(dt_shap_values, "SHAP_row_index");
+	dt_shap_plot_table_index = Column(dt_shap_plot_table, "SHAP_row_index");
+	
+	// shap values highlight original table
+	dt_index << Set Property( "Link ID", 1 );
+	
+	dt_shap_values_index << Set Property("Link Reference",
+		{Reference Table( dt ), Options(
+			"Use Linked Column Name"(1),
+			Row States Synchronization with Referenced Table( Accept( 1 ), Row States( Select, Exclude, Hide ) )
+		)}
+	);
+	
+	dt_shap_plot_table_index << Set Property("Link Reference",
+		{Reference Table( dt ), Options(
+			"Use Linked Column Name"(1),
+			Row States Synchronization with Referenced Table( Accept( 1 ), Row States( Select, Exclude, Hide ) )
+		)}
+	);
+
+	// Plotting	
+	
+	// Global variable importance
+	obj_global_shap = dt_global_shap_values << Graph Builder(
+	Size( 534, 456 ),
+	Show Control Panel( 0 ),
+	Variables(
+		X( :mean ),
+		Y( :Tags, Order By( :mean, Ascending, Order Statistic( "Mean" ) ) ),
+		Color( :CoefVariance )
+	),
+	Elements( Bar( X, Y, Legend( 6 ) ) ),
+	SendToReport(
+		Dispatch(
+			{},
+			"graph title",
+			TextEditBox,
+			{Set Text( "Global variable importance" )}
+		),
+		Dispatch( {}, "X title", TextEditBox, {Set Text( "(mean(|SHAP|)" )} )
+	)
+	);
+	
+	
+	tags_ordered_list = Column(dt_global_shap_values, "Tags")<< Get Values;
+	
+	n_shap_predictors =  N Items(tags_ordered_list);
+	
+	if(n_shap_predictors>=10,
+		print("Reducing the number of shap predictors to show");
+		n_shap_predictors = 10);
+	
+	tags_ordered_list_subset = tags_ordered_list[1::n_shap_predictors];
+	
+	
+	
+	Eval(
+		Substitute(
+				Expr(
+					Column(dt_shap_plot_table, "tag") << set property(
+						"value order",
+						{Custom Order( __sList__ ), Common Order( 0 ), Numerical Order( 0 )}
+					)
+				),
+			Expr( __sList__ ), tags_ordered_list
+		)
+	);
+	
+	// dt_shap_values << New Data View;
+	
+	// SHAP plot
+	obj_shap_plot = dt_shap_plot_table << Graph Builder(
+	Size( 560, 620 ),
+	Show Control Panel( 0 ),
+	Variables(
+		X( :Name( "shap(value)" ) ),
+		Y(
+			:tag,
+			Order By(
+				:Name( "shap(value)" ),
+				Ascending,
+				Order Statistic( "Std Dev" )
+			)
+		),
+		Color( :Name( "norm(value)" ) )
+	),
+	Elements(
+		Points(
+			X,
+			Y,
+			Legend( 25 ),
+			Jitter( "Density Random" ),
+			Jitter Limit( 0.95 )
+		)
+	),
+		Local Data Filter(
+		Add Filter(
+			columns( :tag ),
+			Where(
+				:tag == tags_ordered_list_subset
+			),
+			Display( :tag, N Items( tags_ordered_list_subset ) )
+		)
+	),
+	SendToReport(
+		Dispatch(
+			{},
+			"shap(value)",
+			ScaleBox,
+			{Add Ref Line( 0, "Dotted", "Black", "no effect", 2 )}
+		),
+		Dispatch(
+			{},
+			"400",
+			ScaleBox,
+			{Legend Model(
+				24,
+				Level Name( 0, "Density", Item ID( "shap(value)", 1 ) )
+			), Legend Model(
+				25,
+				Level Name( 1, "NaN", Item ID( "shap(value)", 1 ) ),
+				Properties(
+					0,
+					{gradient(
+						{Color Theme(
+							{"SHAP color 1485", 4099, {{0, 140, 250}, {150, 35, 170},
+							{150, 35, 170}, {255, 0, 80}}, {0, 0.441595441595442,
+							0.54985754985755, 1}}
+						), Width( 12 )}
+					)},
+					Item ID( "norm(value)", 1 )
+				)
+			)}
+		),
+		Dispatch(
+			{},
+			"400",
+			LegendBox,
+			{Set Title( "Legend:" ), Legend Position( {24, [0], 25, [1, -1]} ),
+			Position( {0, 1, -1} )}
+		)
+	)
+	);
+	
+	// UMAP data indexing
+	
+	Try(Close(dt_umap, "No Save" ));
+	
+	Try(
+	dt_umap = Open( "$temp\df_umap.csv", "invisible"); 
+	dt_umap(:umap_clusters) << Set Modeling Type( "Ordinal" );
+	);
+	
+	// Virtual join with interactive link bt datatbles
+	
+	Try(
+	dt_umap_index = Column(dt_umap, "row_index");
+	
+	dt_umap_index << Set Property("Link Reference",
+		{Reference Table( dt ), Options(
+			"Use Linked Column Name"(1),
+			Row States Synchronization with Referenced Table( Accept( 1 ), Row States( Select, Exclude, Hide ) )
+		)}
+	);
+	);
+	
+	// Not closing predictor screening 
+	print("Keeping pre-screening window open");
+	
+	//obj_screening << Close Window();
+	
+	/*
+	dt_umap <<	Graph Builder(
+		Size( 528, 456 ),
+		Show Control Panel( 0 ),
+		Variables( X( :umap1 ), Y( :umap2 ), Color( :row ) ),
+		Elements( Points( X, Y, Legend( 5 ) ) ),
+		SendToReport(
+			Dispatch(
+				{},
+				"400",
+				ScaleBox,
+				{Legend Model( 5, Level Name( 0, "row (index)", Item ID( "row", 1 ) ) )}
+			),
+			Dispatch( {}, "graph title", TextEditBox, {Set Text( "UMAP" )} ),
+			Dispatch( {}, "400", LegendBox, {Legend Position( {5, [0, -1]} )} )
+		)
+	)
+	*/
+	Try(obj_global_shap << Bring Window To Front);
+	Try(obj_shap_plot << Bring Window To Front);
+	// Shap dependence plot
+	
+/*	dt_shap_values << Graph Builder(
+	Size( 652, 586 ),
+	Show Control Panel( 0 ),
+	Variables(
+		X(
+			Referenced Column(
+				"Temp1 2",
+				Reference(
+					Column( :SHAP_row_index ),
+					Reference( Column( :Temp1 ) )
+				)
+			)
+		),
+		Y( :Temp1 ),
+		Color(
+			Referenced Column(
+				"FlowC1 2",
+				Reference(
+					Column( :SHAP_row_index ),
+					Reference( Column( :FlowC1 ) )
+				)
+			)
+		)
+	),
+	Elements( Points( X, Y, Legend( 26 ) ) ),
+	Column Switcher(
+		:Temp1,
+		{:Diff_PressureC1_, :Temp1, :FlowC1, :FlowC9, :Diff_Diff_PressureC1_,
+		:Random_Normal, :TempC3, :Temp4, :Diff_Temp1, :Diff_Random_Normal,
+		:Diff_Diff_FlowC1_, :Diff_FlowC9, :Diff_FlowC1_, :Uniform Noise},
+		Title( "SHAP Values (Y)" )
+	),
+	Column Switcher(
+		Referenced Column(
+			"Temp1 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp1 ) ) )
+		),
+		{Referenced Column(
+			"OC1",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :OC1 ) ) )
+		), Referenced Column(
+			"Temp11",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp11 ) ) )
+		), Referenced Column(
+			"Temp12",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp12 ) ) )
+		), Referenced Column(
+			"PressureC1",
+			Reference(
+				Column( :SHAP_row_index ),
+				Reference( Column( :PressureC1 ) )
+			)
+		), Referenced Column(
+			"TempC1",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC1 ) ) )
+		), Referenced Column(
+			"Temp1 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp1 ) ) )
+		), Referenced Column(
+			"Temp2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp2 ) ) )
+		), Referenced Column(
+			"Temp3",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp3 ) ) )
+		), Referenced Column(
+			"TempC2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC2 ) ) )
+		), Referenced Column(
+			"TempC3 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC3 ) ) )
+		), Referenced Column(
+			"Temp4 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp4 ) ) )
+		), Referenced Column(
+			"Temp5",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp5 ) ) )
+		), Referenced Column(
+			"Temp6",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp6 ) ) )
+		), Referenced Column(
+			"Temp7",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp7 ) ) )
+		), Referenced Column(
+			"Temp8",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp8 ) ) )
+		), Referenced Column(
+			"FlowC9 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC9 ) ) )
+		), Referenced Column(
+			"FlowC2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC2 ) ) )
+		), Referenced Column(
+			"Temp9",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp9 ) ) )
+		), Referenced Column(
+			"Temp10",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp10 ) ) )
+		), Referenced Column(
+			"FlowC3",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC3 ) ) )
+		), Referenced Column(
+			"FlowC4",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC4 ) ) )
+		), Referenced Column(
+			"VapourPressure",
+			Reference(
+				Column( :SHAP_row_index ),
+				Reference( Column( :VapourPressure ) )
+			)
+		)},
+		Title( "Original value (X)" )
+	),
+	Column Switcher(
+		Referenced Column(
+			"FlowC1 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC1 ) ) )
+		),
+		{Referenced Column(
+			"yield 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :yield ) ) )
+		), Referenced Column(
+			"OC1",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :OC1 ) ) )
+		), Referenced Column(
+			"Temp11",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp11 ) ) )
+		), Referenced Column(
+			"Temp12",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp12 ) ) )
+		), Referenced Column(
+			"PressureC1",
+			Reference(
+				Column( :SHAP_row_index ),
+				Reference( Column( :PressureC1 ) )
+			)
+		), Referenced Column(
+			"TempC1",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC1 ) ) )
+		), Referenced Column(
+			"FlowC1 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC1 ) ) )
+		), Referenced Column(
+			"Temp2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp2 ) ) )
+		), Referenced Column(
+			"Temp3",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp3 ) ) )
+		), Referenced Column(
+			"TempC2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC2 ) ) )
+		), Referenced Column(
+			"TempC3 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :TempC3 ) ) )
+		), Referenced Column(
+			"Temp4 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp4 ) ) )
+		), Referenced Column(
+			"Temp5",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp5 ) ) )
+		), Referenced Column(
+			"Temp6",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp6 ) ) )
+		), Referenced Column(
+			"Temp7",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp7 ) ) )
+		), Referenced Column(
+			"Temp8",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp8 ) ) )
+		), Referenced Column(
+			"FlowC9 2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC9 ) ) )
+		), Referenced Column(
+			"FlowC2",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC2 ) ) )
+		), Referenced Column(
+			"Temp9",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp9 ) ) )
+		), Referenced Column(
+			"Temp10",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :Temp10 ) ) )
+		), Referenced Column(
+			"FlowC3",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC3 ) ) )
+		), Referenced Column(
+			"FlowC4",
+			Reference( Column( :SHAP_row_index ), Reference( Column( :FlowC4 ) ) )
+		), Referenced Column(
+			"VapourPressure",
+			Reference(
+				Column( :SHAP_row_index ),
+				Reference( Column( :VapourPressure ) )
+			)
+		)},
+		Title( "Original value for interaction (color)" )
+	),
+	SendToReport(
+		Dispatch(
+			{},
+			"Graph Builder",
+			OutlineBox,
+			{Set Title( "Dependece plot" ), Image Export Display( Normal )}
+		),
+		Dispatch(
+			{},
+			"400",
+			ScaleBox,
+			{Legend Model(
+				26,
+				Properties(
+					0,
+					{gradient(
+						{Color Theme(
+							{"SHAP color 1485", 4099, {{0, 140, 250}, {150, 35, 170},
+							{150, 35, 170}, {255, 0, 80}, Missing( "Black" )}, {0,
+							0.441595441595442, 0.54985754985755, 1}}
+						), Width( 12 )}
+					)},
+					Item ID( "FlowC1 2", 1 )
+				)
+			)}
+		)
+	)
+);*/
+
+	
+	
+//dt << Show Log( 0 );
+);
+
+
+
+CheckBoxDifferencesPress1 = Function( {this},
+	is_active = CheckBoxDifferences1 << Get();
+	Print( "Differences activated (0 or 1)", is_active );
+	rowdiffBox << Enable( is_active );
+);
+)), Allocate(List2 = H List Box(); List11 = V List Box(); Panel1 = Panel Box(); List5 = H List Box(); colListData = Filter Col Selector(Data Table(DataTable1)); OptionsPanel = Panel Box(); CheckBoxDifferences = Check Box(); Lineup1 = Lineup Box(); Text7 = Text Box(); rowdiffBox = Number Edit Box(); Text2 = Text Box(); NumberTreesBox = Number Edit Box(); Text3 = Text Box(); SignalToNoiseRatioBox = Number Edit Box(); Text6 = Text Box(); PythonButton = Button Box(); CheckBoxPython = Check Box(); PanelPython = Panel Box(); Lineup2 = Lineup Box(); Text4 = Text Box(); NdimUMAPBox = Number Edit Box(); List20 = H List Box(); Text5 = Text Box(); distancebox = Combo Box(); SelectPanel = Panel Box(); List30 = V List Box(); List1 = H List Box(); List3 = V List Box(); YButton = Button Box(); colListGroupY = Col List Box(Data Table(DataTable1)); List8 = H List Box(); XButton = Button Box(); colListGroupX = Col List Box(Data Table(DataTable1)); PanelBatch = Panel Box(); Group_panel = Panel Box(); List21 = H List Box(); List22 = H List Box(); List23 = V List Box(); GradeButton = Button Box(); colListGrade = Col List Box(Data Table(DataTable1)); List24 = H List Box(); List25 = H List Box(); List26 = V List Box(); BatchIDButton = Button Box(); colListBatchID = Col List Box(Data Table(DataTable1)); Subgroup_panel = Panel Box(); List27 = H List Box(); List28 = H List Box(); List29 = V List Box(); PhaseIDButton = Button Box(); colListPhaseID = Col List Box(Data Table(DataTable1)); PanelDate = Panel Box(); List16 = H List Box(); List17 = H List Box(); List18 = V List Box(); TimeButton = Button Box(); colListGroupTime = Col List Box(Data Table(DataTable1)); List32 = H List Box(); List33 = H List Box(); List34 = V List Box(); ZButton = Button Box(); colListGroupZ = Col List Box(Data Table(DataTable1)); PanelWright = Panel Box(); List13 = H List Box(); List14 = H List Box(); List15 = V List Box(); WeightButton = Button Box(); colListGroupWeight = Col List Box(Data Table(DataTable1)); ActionPanel = Panel Box(); List31 = V List Box(); Panel2 = Panel Box(); OKbutton = Button Box(); Panel3 = Panel Box(); CancelButton = Button Box(); Panel4 = Panel Box(); RemoveButton = Button Box(); Panel5 = Panel Box(); RecallButton = Button Box(); Panel6 = Panel Box(); ResetButton = Button Box(); List7 = V List Box(); Text1 = Text Box()), Organize(Reparent(List7(Text1)); Reparent(ActionPanel(List7)); Reparent(Panel6(ResetButton)); Reparent(List31(Panel6)); Reparent(Panel5(RecallButton)); Reparent(List31(Panel5)); Reparent(Panel4(RemoveButton)); Reparent(List31(Panel4)); Reparent(Panel3(CancelButton)); Reparent(List31(Panel3)); Reparent(Panel2(OKbutton)); Reparent(List31(Panel2)); Reparent(ActionPanel(List31)); Reparent(List2(ActionPanel)); Reparent(List13(colListGroupWeight)); Reparent(List15(WeightButton)); Reparent(List14(List15)); Reparent(List13(List14)); Reparent(PanelWright(List13)); Reparent(SelectPanel(PanelWright)); Reparent(List32(colListGroupZ)); Reparent(List34(ZButton)); Reparent(List33(List34)); Reparent(List32(List33)); Reparent(PanelDate(List32)); Reparent(List16(colListGroupTime)); Reparent(List18(TimeButton)); Reparent(List17(List18)); Reparent(List16(List17)); Reparent(PanelDate(List16)); Reparent(SelectPanel(PanelDate)); Reparent(List27(colListPhaseID)); Reparent(List29(PhaseIDButton)); Reparent(List28(List29)); Reparent(List27(List28)); Reparent(Subgroup_panel(List27)); Reparent(PanelBatch(Subgroup_panel)); Reparent(List24(colListBatchID)); Reparent(List26(BatchIDButton)); Reparent(List25(List26)); Reparent(List24(List25)); Reparent(Group_panel(List24)); Reparent(List21(colListGrade)); Reparent(List23(GradeButton)); Reparent(List22(List23)); Reparent(List21(List22)); Reparent(Group_panel(List21)); Reparent(PanelBatch(Group_panel)); Reparent(SelectPanel(PanelBatch)); Reparent(List8(colListGroupX)); Reparent(List8(XButton)); Reparent(List30(List8)); Reparent(List1(colListGroupY)); Reparent(List3(YButton)); Reparent(List1(List3)); Reparent(List30(List1)); Reparent(SelectPanel(List30)); Reparent(List2(SelectPanel)); Reparent(Lineup2(distancebox)); Reparent(List20(Text5)); Reparent(Lineup2(List20)); Reparent(Lineup2(NdimUMAPBox)); Reparent(Lineup2(Text4)); Reparent(PanelPython(Lineup2)); Reparent(OptionsPanel(PanelPython)); Placeholder(Lineup1); Reparent(Lineup1(CheckBoxPython)); Reparent(Lineup1(PythonButton)); Reparent(Lineup1(Text6)); Reparent(Lineup1(SignalToNoiseRatioBox)); Reparent(Lineup1(Text3)); Reparent(Lineup1(NumberTreesBox)); Reparent(Lineup1(Text2)); Reparent(Lineup1(rowdiffBox)); Reparent(Lineup1(Text7)); Reparent(OptionsPanel(Lineup1)); Reparent(OptionsPanel(CheckBoxDifferences)); Reparent(List11(OptionsPanel)); Reparent(List5(colListData)); Reparent(Panel1(List5)); Reparent(List11(Panel1)); Reparent(List2(List11)); Relocate(List2(0, 0))), Initialize(List2 << Background Color("None"); List2 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List2 << Enabled(1); List2 << Horizontal Alignment("Center"); List2 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List2 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List2 << Text Color("None"); List2 << UI Only(0); List2 << Vertical Alignment("Center"); List2 << Visibility("Visible"); List2 << Set Min Size(1007, 1293); List2 << Set Max Size(1007, 1293); List2 << Set Stretch({"Neutral", "Neutral"}); List2 << set horizontal(1); List11 << Background Color("None"); List11 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List11 << Enabled(1); List11 << Horizontal Alignment("Default"); List11 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List11 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List11 << Text Color("None"); List11 << UI Only(0); List11 << Vertical Alignment("Default"); List11 << Visibility("Visible"); List11 << Set Min Size(322, 1038); List11 << Set Max Size(322, 1038); List11 << Set Stretch({"Neutral", "Neutral"}); List11 << set horizontal(0); Panel1 << Background Color("None"); Panel1 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel1 << Enabled(1); Panel1 << Horizontal Alignment("Default"); Panel1 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel1 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel1 << Text Color("None"); Panel1 << UI Only(0); Panel1 << Vertical Alignment("Default"); Panel1 << Visibility("Visible"); Panel1 << Set Min Size(200, 516); Panel1 << Set Max Size(200, 516); Panel1 << Set Stretch({"Neutral", "Neutral"}); Panel1 << Set Title("Select columns"); List5 << Background Color("None"); List5 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List5 << Enabled(1); List5 << Horizontal Alignment("Default"); List5 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List5 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List5 << Text Color("None"); List5 << UI Only(0); List5 << Vertical Alignment("Default"); List5 << Visibility("Visible"); List5 << Set Min Size(164, 462); List5 << Set Max Size(164, 462); List5 << Set Stretch({"Neutral", "Neutral"}); List5 << set horizontal(1); colListData << Background Color("None"); colListData << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListData << Enabled(1); colListData << Horizontal Alignment("Default"); colListData << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListData << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListData << Text Color("None"); colListData << UI Only(0); colListData << User Resizable({1, 1}); colListData << Vertical Alignment("Default"); colListData << Visibility("Visible"); colListData << Set Min Size(134, 395); colListData << Set Max Size(134, 395); colListData << Set Stretch({"Neutral", "Neutral"}); colListData << Set Base Font("Text"); colListData << Set Font Name("Segoe UI"); colListData << Set Font Style("Plain"); colListData << Set Font Size(9); colListData << Set Font Scale(1); colListData << Set Max Selected(-1); colListData << Set Size(134, 395); colListData << Set N Lines(23); OptionsPanel << Background Color("None"); OptionsPanel << Border({Left(0), Top(0), Right(0), Bottom(0)}); OptionsPanel << Enabled(1); OptionsPanel << Horizontal Alignment("Default"); OptionsPanel << Margin({Left(0), Top(0), Right(0), Bottom(0)}); OptionsPanel << Padding({Left(0), Top(0), Right(0), Bottom(0)}); OptionsPanel << Text Color("None"); OptionsPanel << UI Only(0); OptionsPanel << Vertical Alignment("Default"); OptionsPanel << Visibility("Visible"); OptionsPanel << Set Min Size(302, 482); OptionsPanel << Set Max Size(302, 482); OptionsPanel << Set Stretch({"Neutral", "Neutral"}); OptionsPanel << Set Title("Options (pre-screening)"); CheckBoxDifferences << Background Color("None"); CheckBoxDifferences << Border({Left(0), Top(0), Right(0), Bottom(0)}); CheckBoxDifferences << Enabled(1); CheckBoxDifferences << Horizontal Alignment("Default"); CheckBoxDifferences << Margin({Left(2), Top(2), Right(2), Bottom(2)}); CheckBoxDifferences << Padding({Left(0), Top(0), Right(0), Bottom(0)}); CheckBoxDifferences << Text Color("None"); CheckBoxDifferences << UI Only(0); CheckBoxDifferences << Vertical Alignment("Default"); CheckBoxDifferences << Visibility("Visible"); CheckBoxDifferences << Set Min Size(192, 15); CheckBoxDifferences << Set Max Size(192, 15); CheckBoxDifferences << Set Stretch({"Neutral", "Neutral"}); CheckBoxDifferences << Set Items({"Calculate row differences (slope)"}); CheckBoxDifferences << Set Function(CheckBoxDifferencesPress); Lineup1 << NCol(2); Lineup1 << Background Color("None"); Lineup1 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Lineup1 << Enabled(1); Lineup1 << Horizontal Alignment("Center"); Lineup1 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Lineup1 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Lineup1 << Text Color("None"); Lineup1 << UI Only(0); Lineup1 << Vertical Alignment("Default"); Lineup1 << Visibility("Visible"); Lineup1 << Set Min Size(266, 214); Lineup1 << Set Max Size(266, 214); Lineup1 << Set Stretch({"Neutral", "Neutral"}); Lineup1 << Spacing(2); Text7 << Background Color("None"); Text7 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text7 << Enabled(1); Text7 << Horizontal Alignment("Default"); Text7 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text7 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text7 << Text Color("Text"); Text7 << UI Only(0); Text7 << Vertical Alignment("Default"); Text7 << Visibility("Visible"); Text7 << Set Min Size(127, 16); Text7 << Set Max Size(127, 16); Text7 << Set Stretch({"Off", "Off"}); Text7 << Set Base Font("Text"); Text7 << Set Font Scale(1); Text7 << Set Text("diff (n rows)"); Text7 << Bullet point(0); Text7 << Justify Text("Left"); Text7 << Rotate Text("Horizontal"); Text7 << Set Width(-1); Text7 << Set Wrap(360); Text7 << Set Tip(""); rowdiffBox << Background Color("None"); rowdiffBox << Border({Left(0), Top(0), Right(0), Bottom(0)}); rowdiffBox << Enabled(0); rowdiffBox << Horizontal Alignment("Default"); rowdiffBox << Margin({Left(0), Top(0), Right(0), Bottom(0)}); rowdiffBox << Padding({Left(0), Top(0), Right(0), Bottom(0)}); rowdiffBox << Text Color("None"); rowdiffBox << UI Only(0); rowdiffBox << Vertical Alignment("Default"); rowdiffBox << Visibility("Visible"); rowdiffBox << Set Min Size(93, 19); rowdiffBox << Set Max Size(93, 19); rowdiffBox << Set Stretch({"Off", "Off"}); rowdiffBox << Set Base Font("Text"); rowdiffBox << Set Font Scale(1); rowdiffBox << Set(1); rowdiffBox << Set Lock(1); rowdiffBox << Set Minimum(1); rowdiffBox << Set Exclude Minimum(0); rowdiffBox << Set Maximum(1000); rowdiffBox << Set Exclude Maximum(0); rowdiffBox << Set Increment(.); rowdiffBox << Set Integer Only(1); rowdiffBox << Set Show Spin Box(0); rowdiffBox << Set Format(format("Best", 12)); rowdiffBox << Set Tip(""); Text2 << Background Color("None"); Text2 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text2 << Enabled(1); Text2 << Horizontal Alignment("Default"); Text2 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text2 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text2 << Text Color("Text"); Text2 << UI Only(0); Text2 << Vertical Alignment("Default"); Text2 << Visibility("Visible"); Text2 << Set Min Size(127, 16); Text2 << Set Max Size(127, 16); Text2 << Set Stretch({"Off", "Off"}); Text2 << Set Base Font("Text"); Text2 << Set Font Scale(1); Text2 << Set Text("Number of trees"); Text2 << Bullet point(0); Text2 << Justify Text("Left"); Text2 << Rotate Text("Horizontal"); Text2 << Set Width(-1); Text2 << Set Wrap(360); Text2 << Set Tip("Aplicable for Python only"); NumberTreesBox << Background Color("None"); NumberTreesBox << Border({Left(0), Top(0), Right(0), Bottom(0)}); NumberTreesBox << Enabled(1); NumberTreesBox << Horizontal Alignment("Default"); NumberTreesBox << Margin({Left(0), Top(0), Right(0), Bottom(0)}); NumberTreesBox << Padding({Left(0), Top(0), Right(0), Bottom(0)}); NumberTreesBox << Text Color("None"); NumberTreesBox << UI Only(0); NumberTreesBox << Vertical Alignment("Default"); NumberTreesBox << Visibility("Visible"); NumberTreesBox << Set Min Size(93, 19); NumberTreesBox << Set Max Size(93, 19); NumberTreesBox << Set Stretch({"Off", "Off"}); NumberTreesBox << Set Base Font("Text"); NumberTreesBox << Set Font Scale(1); NumberTreesBox << Set(100); NumberTreesBox << Set Lock(0); NumberTreesBox << Set Minimum(1); NumberTreesBox << Set Exclude Minimum(0); NumberTreesBox << Set Maximum(100000); NumberTreesBox << Set Exclude Maximum(0); NumberTreesBox << Set Increment(.); NumberTreesBox << Set Integer Only(1); NumberTreesBox << Set Show Spin Box(0); NumberTreesBox << Set Format(format("Best", 12)); NumberTreesBox << Set Tip(""); Text3 << Background Color("None"); Text3 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text3 << Enabled(1); Text3 << Horizontal Alignment("Default"); Text3 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text3 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text3 << Text Color("Text"); Text3 << UI Only(0); Text3 << Vertical Alignment("Default"); Text3 << Visibility("Visible"); Text3 << Set Min Size(127, 16); Text3 << Set Max Size(127, 16); Text3 << Set Stretch({"Off", "Off"}); Text3 << Set Base Font("Text"); Text3 << Set Font Scale(1); Text3 << Set Text("Signal-to-noise  "); Text3 << Bullet point(0); Text3 << Justify Text("Left"); Text3 << Rotate Text("Horizontal"); Text3 << Set Width(-1); Text3 << Set Wrap(360); Text3 << Set Tip("Predictors below this threshold will be removed"); SignalToNoiseRatioBox << Background Color("None"); SignalToNoiseRatioBox << Border({Left(0), Top(0), Right(0), Bottom(0)}); SignalToNoiseRatioBox << Enabled(1); SignalToNoiseRatioBox << Horizontal Alignment("Default"); SignalToNoiseRatioBox << Margin({Left(0), Top(0), Right(0), Bottom(0)}); SignalToNoiseRatioBox << Padding({Left(0), Top(0), Right(0), Bottom(0)}); SignalToNoiseRatioBox << Text Color("None"); SignalToNoiseRatioBox << UI Only(0); SignalToNoiseRatioBox << Vertical Alignment("Default"); SignalToNoiseRatioBox << Visibility("Visible"); SignalToNoiseRatioBox << Set Min Size(93, 19); SignalToNoiseRatioBox << Set Max Size(93, 19); SignalToNoiseRatioBox << Set Stretch({"Off", "Off"}); SignalToNoiseRatioBox << Set Base Font("Text"); SignalToNoiseRatioBox << Set Font Scale(1); SignalToNoiseRatioBox << Set(1); SignalToNoiseRatioBox << Set Lock(0); SignalToNoiseRatioBox << Set Minimum(0.000001); SignalToNoiseRatioBox << Set Exclude Minimum(0); SignalToNoiseRatioBox << Set Maximum(1000); SignalToNoiseRatioBox << Set Exclude Maximum(0); SignalToNoiseRatioBox << Set Increment(.); SignalToNoiseRatioBox << Set Integer Only(0); SignalToNoiseRatioBox << Set Show Spin Box(0); SignalToNoiseRatioBox << Set Format(format("Best", 12)); SignalToNoiseRatioBox << Set Tip(""); Text6 << Background Color("None"); Text6 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text6 << Enabled(1); Text6 << Horizontal Alignment("Default"); Text6 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text6 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text6 << Text Color("Text"); Text6 << UI Only(0); Text6 << Vertical Alignment("Default"); Text6 << Visibility("Visible"); Text6 << Set Min Size(127, 16); Text6 << Set Max Size(127, 16); Text6 << Set Stretch({"Off", "Off"}); Text6 << Set Base Font("Text"); Text6 << Set Font Scale(1); Text6 << Set Text("Code and examples"); Text6 << Bullet point(0); Text6 << Justify Text("Left"); Text6 << Rotate Text("Horizontal"); Text6 << Set Width(-1); Text6 << Set Wrap(360); Text6 << Set Tip(""); PythonButton << Background Color("None"); PythonButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); PythonButton << Enabled(1); PythonButton << Horizontal Alignment("Default"); PythonButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); PythonButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PythonButton << Text Color("None"); PythonButton << UI Only(0); PythonButton << Vertical Alignment("Default"); PythonButton << Visibility("Visible"); PythonButton << Set Min Size(89, 19); PythonButton << Set Max Size(89, 19); PythonButton << Set Stretch({"Off", "Off"}); PythonButton << Set Button Name("view | edit"); PythonButton << Style("Normal"); PythonButton << Set(0); PythonButton << Set Icon(""); PythonButton << Set Icon Location("Right"); PythonButton << Set Function(OpenNotebook); CheckBoxPython << Background Color("None"); CheckBoxPython << Border({Left(0), Top(0), Right(0), Bottom(0)}); CheckBoxPython << Enabled(1); CheckBoxPython << Horizontal Alignment("Default"); CheckBoxPython << Margin({Left(2), Top(2), Right(2), Bottom(2)}); CheckBoxPython << Padding({Left(0), Top(0), Right(0), Bottom(0)}); CheckBoxPython << Text Color("None"); CheckBoxPython << UI Only(0); CheckBoxPython << Vertical Alignment("Default"); CheckBoxPython << Visibility("Visible"); CheckBoxPython << Set Min Size(123, 15); CheckBoxPython << Set Max Size(123, 15); CheckBoxPython << Set Stretch({"Neutral", "Neutral"}); CheckBoxPython << Set Items({"SHAP plot (Python)"}); CheckBoxPython << Set Function(CheckBoxPythonPress); PanelPython << Background Color("None"); PanelPython << Border({Left(0), Top(0), Right(0), Bottom(0)}); PanelPython << Enabled(1); PanelPython << Horizontal Alignment("Default"); PanelPython << Margin({Left(0), Top(0), Right(0), Bottom(0)}); PanelPython << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PanelPython << Text Color("None"); PanelPython << UI Only(0); PanelPython << Vertical Alignment("Default"); PanelPython << Visibility("Visible"); PanelPython << Set Min Size(248, 155); PanelPython << Set Max Size(248, 155); PanelPython << Set Stretch({"Neutral", "Neutral"}); PanelPython << Set Title("Python (PyJMP installed)"); Lineup2 << NCol(2); Lineup2 << Background Color("None"); Lineup2 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Lineup2 << Enabled(1); Lineup2 << Horizontal Alignment("Default"); Lineup2 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Lineup2 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Lineup2 << Text Color("None"); Lineup2 << UI Only(0); Lineup2 << Vertical Alignment("Default"); Lineup2 << Visibility("Visible"); Lineup2 << Set Min Size(212, 101); Lineup2 << Set Max Size(212, 101); Lineup2 << Set Stretch({"Neutral", "Neutral"}); Lineup2 << Spacing(2); Text4 << Background Color("None"); Text4 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text4 << Enabled(1); Text4 << Horizontal Alignment("Default"); Text4 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text4 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text4 << Text Color("Text"); Text4 << UI Only(0); Text4 << Vertical Alignment("Default"); Text4 << Visibility("Visible"); Text4 << Set Min Size(76, 16); Text4 << Set Max Size(76, 16); Text4 << Set Stretch({"Off", "Off"}); Text4 << Set Base Font("Text"); Text4 << Set Font Scale(1); Text4 << Set Text("# dim (UMAP)"); Text4 << Bullet point(0); Text4 << Justify Text("Left"); Text4 << Rotate Text("Horizontal"); Text4 << Set Width(-1); Text4 << Set Wrap(360); Text4 << Set Tip(""); NdimUMAPBox << Background Color("None"); NdimUMAPBox << Border({Left(0), Top(0), Right(0), Bottom(0)}); NdimUMAPBox << Enabled(1); NdimUMAPBox << Horizontal Alignment("Default"); NdimUMAPBox << Margin({Left(0), Top(0), Right(0), Bottom(0)}); NdimUMAPBox << Padding({Left(0), Top(0), Right(0), Bottom(0)}); NdimUMAPBox << Text Color("None"); NdimUMAPBox << UI Only(0); NdimUMAPBox << Vertical Alignment("Default"); NdimUMAPBox << Visibility("Visible"); NdimUMAPBox << Set Min Size(90, 19); NdimUMAPBox << Set Max Size(90, 19); NdimUMAPBox << Set Stretch({"Off", "Off"}); NdimUMAPBox << Set Base Font("Text"); NdimUMAPBox << Set Font Scale(1); NdimUMAPBox << Set(2); NdimUMAPBox << Set Lock(0); NdimUMAPBox << Set Minimum(1); NdimUMAPBox << Set Exclude Minimum(0); NdimUMAPBox << Set Maximum(30); NdimUMAPBox << Set Exclude Maximum(0); NdimUMAPBox << Set Increment(.); NdimUMAPBox << Set Integer Only(1); NdimUMAPBox << Set Show Spin Box(0); NdimUMAPBox << Set Format(format("Best", 12)); NdimUMAPBox << Set Tip(""); List20 << Background Color("None"); List20 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List20 << Enabled(1); List20 << Horizontal Alignment("Default"); List20 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List20 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List20 << Text Color("None"); List20 << UI Only(0); List20 << Vertical Alignment("Default"); List20 << Visibility("Visible"); List20 << Set Min Size(76, 36); List20 << Set Max Size(76, 36); List20 << Set Stretch({"Neutral", "Neutral"}); List20 << set horizontal(1); Text5 << Background Color("None"); Text5 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text5 << Enabled(1); Text5 << Horizontal Alignment("Default"); Text5 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text5 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text5 << Text Color("Text"); Text5 << UI Only(0); Text5 << Vertical Alignment("Default"); Text5 << Visibility("Visible"); Text5 << Set Min Size(45, 16); Text5 << Set Max Size(45, 16); Text5 << Set Stretch({"Off", "Off"}); Text5 << Set Base Font("Text"); Text5 << Set Font Scale(1); Text5 << Set Text("distance"); Text5 << Bullet point(0); Text5 << Justify Text("Left"); Text5 << Rotate Text("Horizontal"); Text5 << Set Width(-1); Text5 << Set Wrap(360); Text5 << Set Tip(""); distancebox << Background Color("None"); distancebox << Border({Left(0), Top(0), Right(0), Bottom(0)}); distancebox << Enabled(1); distancebox << Horizontal Alignment("Default"); distancebox << Margin({Left(2), Top(2), Right(2), Bottom(2)}); distancebox << Padding({Left(0), Top(0), Right(0), Bottom(0)}); distancebox << Text Color("None"); distancebox << UI Only(0); distancebox << Vertical Alignment("Default"); distancebox << Visibility("Visible"); distancebox << Set Min Size(86, 21); distancebox << Set Max Size(86, 21); distancebox << Set Stretch({"Off", "Off"}); distancebox << Set Items({"euclidean", "manhattan"}); distancebox << Set(1); SelectPanel << Background Color("None"); SelectPanel << Border({Left(0), Top(0), Right(0), Bottom(0)}); SelectPanel << Enabled(1); SelectPanel << Horizontal Alignment("Default"); SelectPanel << Margin({Left(0), Top(0), Right(0), Bottom(0)}); SelectPanel << Padding({Left(0), Top(0), Right(0), Bottom(0)}); SelectPanel << Text Color("None"); SelectPanel << UI Only(0); SelectPanel << Vertical Alignment("Default"); SelectPanel << Visibility("Visible"); SelectPanel << Set Min Size(469, 1273); SelectPanel << Set Max Size(469, 1273); SelectPanel << Set Stretch({"Neutral", "Neutral"}); SelectPanel << Set Title("Cast selected columns into roles"); List30 << Background Color("None"); List30 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List30 << Enabled(1); List30 << Horizontal Alignment("Default"); List30 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List30 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List30 << Text Color("None"); List30 << UI Only(0); List30 << Vertical Alignment("Default"); List30 << Visibility("Visible"); List30 << Set Min Size(371, 331); List30 << Set Max Size(371, 331); List30 << Set Stretch({"Neutral", "Neutral"}); List30 << set horizontal(0); List1 << Background Color("None"); List1 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List1 << Enabled(1); List1 << Horizontal Alignment("Default"); List1 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List1 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List1 << Text Color("None"); List1 << UI Only(0); List1 << Vertical Alignment("Default"); List1 << Visibility("Visible"); List1 << Set Min Size(351, 63); List1 << Set Max Size(351, 63); List1 << Set Stretch({"Neutral", "Neutral"}); List1 << set horizontal(1); List3 << Background Color("None"); List3 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List3 << Enabled(1); List3 << Horizontal Alignment("Default"); List3 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List3 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List3 << Text Color("None"); List3 << UI Only(0); List3 << Vertical Alignment("Default"); List3 << Visibility("Visible"); List3 << Set Min Size(91, 43); List3 << Set Max Size(91, 43); List3 << Set Stretch({"Neutral", "Neutral"}); List3 << set horizontal(0); YButton << Background Color("None"); YButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); YButton << Enabled(1); YButton << Horizontal Alignment("Default"); YButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); YButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); YButton << Text Color("None"); YButton << UI Only(0); YButton << Vertical Alignment("Default"); YButton << Visibility("Visible"); YButton << Set Min Size(67, 19); YButton << Set Max Size(67, 19); YButton << Set Stretch({"Off", "Off"}); YButton << Set Button Name("Y, Response"); YButton << Style("Normal"); YButton << Set(0); YButton << Set Icon(""); YButton << Set Icon Location("Right"); YButton << Set Function(YButtonPress); colListGroupY << Background Color("None"); colListGroupY << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupY << Enabled(1); colListGroupY << Horizontal Alignment("Default"); colListGroupY << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupY << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupY << Text Color("None"); colListGroupY << UI Only(0); colListGroupY << User Resizable({1, 1}); colListGroupY << Vertical Alignment("Default"); colListGroupY << Visibility("Visible"); colListGroupY << Set Min Size(220, 21); colListGroupY << Set Max Size(220, 21); colListGroupY << Set Stretch({"Off", "Off"}); colListGroupY << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListGroupY << Set Data Type("Numeric"); colListGroupY << Set Min Items(0); colListGroupY << Set Max Items(1); colListGroupY << Set Max Selected(-1); colListGroupY << Set Size(220, 21); colListGroupY << Set N Lines(1); colListGroupY << Set Base Font("Text"); colListGroupY << Set Font Scale(1); List8 << Background Color("None"); List8 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List8 << Enabled(1); List8 << Horizontal Alignment("Default"); List8 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List8 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List8 << Text Color("None"); List8 << UI Only(0); List8 << Vertical Alignment("Default"); List8 << Visibility("Visible"); List8 << Set Min Size(331, 228); List8 << Set Max Size(331, 228); List8 << Set Stretch({"Neutral", "Neutral"}); List8 << set horizontal(1); XButton << Background Color("None"); XButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); XButton << Enabled(1); XButton << Horizontal Alignment("Default"); XButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); XButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); XButton << Text Color("None"); XButton << UI Only(0); XButton << Vertical Alignment("Default"); XButton << Visibility("Visible"); XButton << Set Min Size(67, 19); XButton << Set Max Size(67, 19); XButton << Set Stretch({"Off", "Off"}); XButton << Set Button Name("X, Factor"); XButton << Style("Normal"); XButton << Set(0); XButton << Set Icon(""); XButton << Set Icon Location("Right"); XButton << Set Function(XButtonPress); colListGroupX << Background Color("None"); colListGroupX << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupX << Enabled(1); colListGroupX << Horizontal Alignment("Default"); colListGroupX << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupX << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupX << Text Color("None"); colListGroupX << UI Only(0); colListGroupX << User Resizable({1, 1}); colListGroupX << Vertical Alignment("Default"); colListGroupX << Visibility("Visible"); colListGroupX << Set Min Size(220, 208); colListGroupX << Set Max Size(220, 208); colListGroupX << Set Stretch({"Off", "Off"}); colListGroupX << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListGroupX << Set Data Type("Numeric"); colListGroupX << Set Min Items(1); colListGroupX << Set Max Items(-1); colListGroupX << Set Max Selected(-1); colListGroupX << Set Size(220, 208); colListGroupX << Set N Lines(12); colListGroupX << Set Base Font("Text"); colListGroupX << Set Font Scale(1); PanelBatch << Background Color("None"); PanelBatch << Border({Left(0), Top(0), Right(0), Bottom(0)}); PanelBatch << Enabled(1); PanelBatch << Horizontal Alignment("Default"); PanelBatch << Margin({Left(0), Top(0), Right(0), Bottom(0)}); PanelBatch << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PanelBatch << Text Color("None"); PanelBatch << UI Only(0); PanelBatch << Vertical Alignment("Default"); PanelBatch << Visibility("Visible"); PanelBatch << Set Min Size(433, 451); PanelBatch << Set Max Size(433, 451); PanelBatch << Set Stretch({"Neutral", "Neutral"}); PanelBatch << Set Title("Batch info (generates summary table/fingerprints)"); Group_panel << Background Color("None"); Group_panel << Border({Left(0), Top(0), Right(0), Bottom(0)}); Group_panel << Enabled(1); Group_panel << Horizontal Alignment("Default"); Group_panel << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Group_panel << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Group_panel << Text Color("None"); Group_panel << UI Only(0); Group_panel << Vertical Alignment("Default"); Group_panel << Visibility("Visible"); Group_panel << Set Min Size(397, 240); Group_panel << Set Max Size(397, 240); Group_panel << Set Stretch({"Neutral", "Neutral"}); Group_panel << Set Title("Group"); List21 << Background Color("None"); List21 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List21 << Enabled(1); List21 << Horizontal Alignment("Default"); List21 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List21 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List21 << Text Color("None"); List21 << UI Only(0); List21 << Vertical Alignment("Default"); List21 << Visibility("Visible"); List21 << Set Min Size(361, 83); List21 << Set Max Size(361, 83); List21 << Set Stretch({"Neutral", "Neutral"}); List21 << set horizontal(1); List22 << Background Color("None"); List22 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List22 << Enabled(1); List22 << Horizontal Alignment("Default"); List22 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List22 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List22 << Text Color("None"); List22 << UI Only(0); List22 << Vertical Alignment("Default"); List22 << Visibility("Visible"); List22 << Set Min Size(111, 63); List22 << Set Max Size(111, 63); List22 << Set Stretch({"Neutral", "Neutral"}); List22 << set horizontal(1); List23 << Background Color("None"); List23 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List23 << Enabled(1); List23 << Horizontal Alignment("Default"); List23 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List23 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List23 << Text Color("None"); List23 << UI Only(0); List23 << Vertical Alignment("Default"); List23 << Visibility("Visible"); List23 << Set Min Size(91, 43); List23 << Set Max Size(91, 43); List23 << Set Stretch({"Neutral", "Neutral"}); List23 << set horizontal(0); GradeButton << Background Color("None"); GradeButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); GradeButton << Enabled(1); GradeButton << Horizontal Alignment("Default"); GradeButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); GradeButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); GradeButton << Text Color("None"); GradeButton << UI Only(0); GradeButton << Vertical Alignment("Default"); GradeButton << Visibility("Visible"); GradeButton << Set Min Size(67, 19); GradeButton << Set Max Size(67, 19); GradeButton << Set Stretch({"Off", "Off"}); GradeButton << Set Button Name("Grade"); GradeButton << Style("Normal"); GradeButton << Set(0); GradeButton << Set Icon(""); GradeButton << Set Icon Location("Right"); GradeButton << Set Function(GradeButtonPress); colListGrade << Background Color("None"); colListGrade << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGrade << Enabled(1); colListGrade << Horizontal Alignment("Default"); colListGrade << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGrade << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGrade << Text Color("None"); colListGrade << UI Only(0); colListGrade << User Resizable({1, 1}); colListGrade << Vertical Alignment("Default"); colListGrade << Visibility("Visible"); colListGrade << Set Min Size(210, 21); colListGrade << Set Max Size(210, 21); colListGrade << Set Stretch({"Off", "Off"}); colListGrade << Modeling Type({"Ordinal", "Nominal"}); colListGrade << Set Data Type("Any"); colListGrade << Set Min Items(0); colListGrade << Set Max Items(1); colListGrade << Set Max Selected(-1); colListGrade << Set Size(210, 21); colListGrade << Set N Lines(1); colListGrade << Set Base Font("Text"); colListGrade << Set Font Scale(1); List24 << Background Color("None"); List24 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List24 << Enabled(1); List24 << Horizontal Alignment("Default"); List24 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List24 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List24 << Text Color("None"); List24 << UI Only(0); List24 << Vertical Alignment("Default"); List24 << Visibility("Visible"); List24 << Set Min Size(361, 83); List24 << Set Max Size(361, 83); List24 << Set Stretch({"Neutral", "Neutral"}); List24 << set horizontal(1); List25 << Background Color("None"); List25 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List25 << Enabled(1); List25 << Horizontal Alignment("Default"); List25 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List25 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List25 << Text Color("None"); List25 << UI Only(0); List25 << Vertical Alignment("Default"); List25 << Visibility("Visible"); List25 << Set Min Size(111, 63); List25 << Set Max Size(111, 63); List25 << Set Stretch({"Neutral", "Neutral"}); List25 << set horizontal(1); List26 << Background Color("None"); List26 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List26 << Enabled(1); List26 << Horizontal Alignment("Default"); List26 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List26 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List26 << Text Color("None"); List26 << UI Only(0); List26 << Vertical Alignment("Default"); List26 << Visibility("Visible"); List26 << Set Min Size(91, 43); List26 << Set Max Size(91, 43); List26 << Set Stretch({"Neutral", "Neutral"}); List26 << set horizontal(0); BatchIDButton << Background Color("None"); BatchIDButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); BatchIDButton << Enabled(1); BatchIDButton << Horizontal Alignment("Default"); BatchIDButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); BatchIDButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); BatchIDButton << Text Color("None"); BatchIDButton << UI Only(0); BatchIDButton << Vertical Alignment("Default"); BatchIDButton << Visibility("Visible"); BatchIDButton << Set Min Size(67, 19); BatchIDButton << Set Max Size(67, 19); BatchIDButton << Set Stretch({"Off", "Off"}); BatchIDButton << Set Button Name("BatchID"); BatchIDButton << Style("Normal"); BatchIDButton << Set(0); BatchIDButton << Set Icon(""); BatchIDButton << Set Icon Location("Right"); BatchIDButton << Set Function(BatchIDButtonPress); colListBatchID << Background Color("None"); colListBatchID << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListBatchID << Enabled(1); colListBatchID << Horizontal Alignment("Default"); colListBatchID << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListBatchID << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListBatchID << Text Color("None"); colListBatchID << UI Only(0); colListBatchID << User Resizable({1, 1}); colListBatchID << Vertical Alignment("Default"); colListBatchID << Visibility("Visible"); colListBatchID << Set Min Size(210, 21); colListBatchID << Set Max Size(210, 21); colListBatchID << Set Stretch({"Off", "Off"}); colListBatchID << Modeling Type({"Ordinal", "Nominal"}); colListBatchID << Set Data Type("Any"); colListBatchID << Set Min Items(0); colListBatchID << Set Max Items(1); colListBatchID << Set Max Selected(-1); colListBatchID << Set Size(210, 21); colListBatchID << Set N Lines(1); colListBatchID << Set Base Font("Text"); colListBatchID << Set Font Scale(1); Subgroup_panel << Background Color("None"); Subgroup_panel << Border({Left(0), Top(0), Right(0), Bottom(0)}); Subgroup_panel << Enabled(1); Subgroup_panel << Horizontal Alignment("Default"); Subgroup_panel << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Subgroup_panel << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Subgroup_panel << Text Color("None"); Subgroup_panel << UI Only(0); Subgroup_panel << Vertical Alignment("Default"); Subgroup_panel << Visibility("Visible"); Subgroup_panel << Set Min Size(397, 137); Subgroup_panel << Set Max Size(397, 137); Subgroup_panel << Set Stretch({"Neutral", "Neutral"}); Subgroup_panel << Set Title("Subgroup"); List27 << Background Color("None"); List27 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List27 << Enabled(1); List27 << Horizontal Alignment("Default"); List27 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List27 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List27 << Text Color("None"); List27 << UI Only(0); List27 << Vertical Alignment("Default"); List27 << Visibility("Visible"); List27 << Set Min Size(361, 83); List27 << Set Max Size(361, 83); List27 << Set Stretch({"Neutral", "Neutral"}); List27 << set horizontal(1); List28 << Background Color("None"); List28 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List28 << Enabled(1); List28 << Horizontal Alignment("Default"); List28 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List28 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List28 << Text Color("None"); List28 << UI Only(0); List28 << Vertical Alignment("Default"); List28 << Visibility("Visible"); List28 << Set Min Size(111, 63); List28 << Set Max Size(111, 63); List28 << Set Stretch({"Neutral", "Neutral"}); List28 << set horizontal(1); List29 << Background Color("None"); List29 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List29 << Enabled(1); List29 << Horizontal Alignment("Default"); List29 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List29 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List29 << Text Color("None"); List29 << UI Only(0); List29 << Vertical Alignment("Default"); List29 << Visibility("Visible"); List29 << Set Min Size(91, 43); List29 << Set Max Size(91, 43); List29 << Set Stretch({"Neutral", "Neutral"}); List29 << set horizontal(0); PhaseIDButton << Background Color("None"); PhaseIDButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); PhaseIDButton << Enabled(1); PhaseIDButton << Horizontal Alignment("Default"); PhaseIDButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); PhaseIDButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PhaseIDButton << Text Color("None"); PhaseIDButton << UI Only(0); PhaseIDButton << Vertical Alignment("Default"); PhaseIDButton << Visibility("Visible"); PhaseIDButton << Set Min Size(67, 19); PhaseIDButton << Set Max Size(67, 19); PhaseIDButton << Set Stretch({"Off", "Off"}); PhaseIDButton << Set Button Name("PhaseID"); PhaseIDButton << Style("Normal"); PhaseIDButton << Set(0); PhaseIDButton << Set Icon(""); PhaseIDButton << Set Icon Location("Right"); PhaseIDButton << Set Function(PhaseIDButtonPress); colListPhaseID << Background Color("None"); colListPhaseID << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListPhaseID << Enabled(1); colListPhaseID << Horizontal Alignment("Default"); colListPhaseID << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListPhaseID << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListPhaseID << Text Color("None"); colListPhaseID << UI Only(0); colListPhaseID << User Resizable({1, 1}); colListPhaseID << Vertical Alignment("Default"); colListPhaseID << Visibility("Visible"); colListPhaseID << Set Min Size(210, 21); colListPhaseID << Set Max Size(210, 21); colListPhaseID << Set Stretch({"Off", "Off"}); colListPhaseID << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListPhaseID << Set Data Type("Any"); colListPhaseID << Set Min Items(0); colListPhaseID << Set Max Items(1); colListPhaseID << Set Max Selected(-1); colListPhaseID << Set Size(210, 21); colListPhaseID << Set N Lines(1); colListPhaseID << Set Base Font("Text"); colListPhaseID << Set Font Scale(1); PanelDate << Background Color("None"); PanelDate << Border({Left(0), Top(0), Right(0), Bottom(0)}); PanelDate << Enabled(1); PanelDate << Horizontal Alignment("Default"); PanelDate << Margin({Left(0), Top(0), Right(0), Bottom(0)}); PanelDate << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PanelDate << Text Color("None"); PanelDate << UI Only(0); PanelDate << Vertical Alignment("Default"); PanelDate << Visibility("Visible"); PanelDate << Set Min Size(397, 240); PanelDate << Set Max Size(397, 240); PanelDate << Set Stretch({"Neutral", "Neutral"}); PanelDate << Set Title("Supplementary (passed to final table)"); List16 << Background Color("None"); List16 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List16 << Enabled(1); List16 << Horizontal Alignment("Default"); List16 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List16 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List16 << Text Color("None"); List16 << UI Only(0); List16 << Vertical Alignment("Default"); List16 << Visibility("Visible"); List16 << Set Min Size(361, 83); List16 << Set Max Size(361, 83); List16 << Set Stretch({"Neutral", "Neutral"}); List16 << set horizontal(1); List17 << Background Color("None"); List17 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List17 << Enabled(1); List17 << Horizontal Alignment("Default"); List17 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List17 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List17 << Text Color("None"); List17 << UI Only(0); List17 << Vertical Alignment("Default"); List17 << Visibility("Visible"); List17 << Set Min Size(111, 63); List17 << Set Max Size(111, 63); List17 << Set Stretch({"Neutral", "Neutral"}); List17 << set horizontal(1); List18 << Background Color("None"); List18 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List18 << Enabled(1); List18 << Horizontal Alignment("Default"); List18 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List18 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List18 << Text Color("None"); List18 << UI Only(0); List18 << Vertical Alignment("Default"); List18 << Visibility("Visible"); List18 << Set Min Size(91, 43); List18 << Set Max Size(91, 43); List18 << Set Stretch({"Neutral", "Neutral"}); List18 << set horizontal(0); TimeButton << Background Color("None"); TimeButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); TimeButton << Enabled(1); TimeButton << Horizontal Alignment("Default"); TimeButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); TimeButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); TimeButton << Text Color("None"); TimeButton << UI Only(0); TimeButton << Vertical Alignment("Default"); TimeButton << Visibility("Visible"); TimeButton << Set Min Size(67, 19); TimeButton << Set Max Size(67, 19); TimeButton << Set Stretch({"Off", "Off"}); TimeButton << Set Button Name("t, Datetime"); TimeButton << Style("Normal"); TimeButton << Set(0); TimeButton << Set Icon(""); TimeButton << Set Icon Location("Right"); TimeButton << Set Function(TimeButtonPress); colListGroupTime << Background Color("None"); colListGroupTime << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupTime << Enabled(1); colListGroupTime << Horizontal Alignment("Default"); colListGroupTime << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupTime << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupTime << Text Color("None"); colListGroupTime << UI Only(0); colListGroupTime << User Resizable({1, 1}); colListGroupTime << Vertical Alignment("Default"); colListGroupTime << Visibility("Visible"); colListGroupTime << Set Min Size(210, 21); colListGroupTime << Set Max Size(210, 21); colListGroupTime << Set Stretch({"Off", "Off"}); colListGroupTime << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListGroupTime << Set Data Type("Numeric"); colListGroupTime << Set Min Items(0); colListGroupTime << Set Max Items(1); colListGroupTime << Set Max Selected(-1); colListGroupTime << Set Size(210, 21); colListGroupTime << Set N Lines(1); colListGroupTime << Set Base Font("Text"); colListGroupTime << Set Font Scale(1); List32 << Background Color("None"); List32 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List32 << Enabled(1); List32 << Horizontal Alignment("Default"); List32 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List32 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List32 << Text Color("None"); List32 << UI Only(0); List32 << Vertical Alignment("Default"); List32 << Visibility("Visible"); List32 << Set Min Size(361, 83); List32 << Set Max Size(361, 83); List32 << Set Stretch({"Neutral", "Neutral"}); List32 << set horizontal(1); List33 << Background Color("None"); List33 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List33 << Enabled(1); List33 << Horizontal Alignment("Default"); List33 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List33 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List33 << Text Color("None"); List33 << UI Only(0); List33 << Vertical Alignment("Default"); List33 << Visibility("Visible"); List33 << Set Min Size(111, 63); List33 << Set Max Size(111, 63); List33 << Set Stretch({"Neutral", "Neutral"}); List33 << set horizontal(1); List34 << Background Color("None"); List34 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List34 << Enabled(1); List34 << Horizontal Alignment("Default"); List34 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List34 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List34 << Text Color("None"); List34 << UI Only(0); List34 << Vertical Alignment("Default"); List34 << Visibility("Visible"); List34 << Set Min Size(91, 43); List34 << Set Max Size(91, 43); List34 << Set Stretch({"Neutral", "Neutral"}); List34 << set horizontal(0); ZButton << Background Color("None"); ZButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); ZButton << Enabled(1); ZButton << Horizontal Alignment("Default"); ZButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); ZButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); ZButton << Text Color("None"); ZButton << UI Only(0); ZButton << Vertical Alignment("Default"); ZButton << Visibility("Visible"); ZButton << Set Min Size(67, 19); ZButton << Set Max Size(67, 19); ZButton << Set Stretch({"Off", "Off"}); ZButton << Set Button Name("Z"); ZButton << Style("Normal"); ZButton << Set(0); ZButton << Set Icon(""); ZButton << Set Icon Location("Right"); ZButton << Set Function(ZButtonPress); colListGroupZ << Background Color("None"); colListGroupZ << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupZ << Enabled(1); colListGroupZ << Horizontal Alignment("Default"); colListGroupZ << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupZ << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupZ << Text Color("None"); colListGroupZ << UI Only(0); colListGroupZ << User Resizable({1, 1}); colListGroupZ << Vertical Alignment("Default"); colListGroupZ << Visibility("Visible"); colListGroupZ << Set Min Size(210, 21); colListGroupZ << Set Max Size(210, 21); colListGroupZ << Set Stretch({"Off", "Off"}); colListGroupZ << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListGroupZ << Set Data Type("Numeric"); colListGroupZ << Set Min Items(0); colListGroupZ << Set Max Items(1); colListGroupZ << Set Max Selected(-1); colListGroupZ << Set Size(210, 21); colListGroupZ << Set N Lines(1); colListGroupZ << Set Base Font("Text"); colListGroupZ << Set Font Scale(1); PanelWright << Background Color("None"); PanelWright << Border({Left(0), Top(0), Right(0), Bottom(0)}); PanelWright << Enabled(1); PanelWright << Horizontal Alignment("Default"); PanelWright << Margin({Left(0), Top(0), Right(0), Bottom(0)}); PanelWright << Padding({Left(0), Top(0), Right(0), Bottom(0)}); PanelWright << Text Color("None"); PanelWright << UI Only(0); PanelWright << Vertical Alignment("Default"); PanelWright << Visibility("Visible"); PanelWright << Set Min Size(397, 137); PanelWright << Set Max Size(397, 137); PanelWright << Set Stretch({"Neutral", "Neutral"}); PanelWright << Set Title("Column indicating how relevant (0 to 1)"); List13 << Background Color("None"); List13 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List13 << Enabled(1); List13 << Horizontal Alignment("Default"); List13 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List13 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List13 << Text Color("None"); List13 << UI Only(0); List13 << Vertical Alignment("Default"); List13 << Visibility("Visible"); List13 << Set Min Size(361, 83); List13 << Set Max Size(361, 83); List13 << Set Stretch({"Neutral", "Neutral"}); List13 << set horizontal(1); List14 << Background Color("None"); List14 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List14 << Enabled(1); List14 << Horizontal Alignment("Default"); List14 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List14 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List14 << Text Color("None"); List14 << UI Only(0); List14 << Vertical Alignment("Default"); List14 << Visibility("Visible"); List14 << Set Min Size(111, 63); List14 << Set Max Size(111, 63); List14 << Set Stretch({"Neutral", "Neutral"}); List14 << set horizontal(1); List15 << Background Color("None"); List15 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List15 << Enabled(1); List15 << Horizontal Alignment("Default"); List15 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List15 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List15 << Text Color("None"); List15 << UI Only(0); List15 << Vertical Alignment("Default"); List15 << Visibility("Visible"); List15 << Set Min Size(91, 43); List15 << Set Max Size(91, 43); List15 << Set Stretch({"Neutral", "Neutral"}); List15 << set horizontal(0); WeightButton << Background Color("None"); WeightButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); WeightButton << Enabled(1); WeightButton << Horizontal Alignment("Default"); WeightButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); WeightButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); WeightButton << Text Color("None"); WeightButton << UI Only(0); WeightButton << Vertical Alignment("Default"); WeightButton << Visibility("Visible"); WeightButton << Set Min Size(67, 19); WeightButton << Set Max Size(67, 19); WeightButton << Set Stretch({"Off", "Off"}); WeightButton << Set Button Name("Weight"); WeightButton << Style("Normal"); WeightButton << Set(0); WeightButton << Set Icon(""); WeightButton << Set Icon Location("Right"); WeightButton << Set Function(WeightButtonPress); colListGroupWeight << Background Color("None"); colListGroupWeight << Border({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupWeight << Enabled(1); colListGroupWeight << Horizontal Alignment("Default"); colListGroupWeight << Margin({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupWeight << Padding({Left(0), Top(0), Right(0), Bottom(0)}); colListGroupWeight << Text Color("None"); colListGroupWeight << UI Only(0); colListGroupWeight << User Resizable({1, 1}); colListGroupWeight << Vertical Alignment("Default"); colListGroupWeight << Visibility("Visible"); colListGroupWeight << Set Min Size(210, 21); colListGroupWeight << Set Max Size(210, 21); colListGroupWeight << Set Stretch({"Off", "Off"}); colListGroupWeight << Modeling Type({"Continuous", "Ordinal", "Nominal"}); colListGroupWeight << Set Data Type("Numeric"); colListGroupWeight << Set Min Items(0); colListGroupWeight << Set Max Items(1); colListGroupWeight << Set Max Selected(-1); colListGroupWeight << Set Size(210, 21); colListGroupWeight << Set N Lines(1); colListGroupWeight << Set Base Font("Text"); colListGroupWeight << Set Font Scale(1); ActionPanel << Background Color("None"); ActionPanel << Border({Left(0), Top(0), Right(0), Bottom(0)}); ActionPanel << Enabled(1); ActionPanel << Horizontal Alignment("Default"); ActionPanel << Margin({Left(0), Top(0), Right(0), Bottom(0)}); ActionPanel << Padding({Left(0), Top(0), Right(0), Bottom(0)}); ActionPanel << Text Color("None"); ActionPanel << UI Only(0); ActionPanel << Vertical Alignment("Default"); ActionPanel << Visibility("Visible"); ActionPanel << Set Min Size(156, 595); ActionPanel << Set Max Size(156, 595); ActionPanel << Set Stretch({"Neutral", "Neutral"}); ActionPanel << Set Title("Actions"); List31 << Background Color("None"); List31 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List31 << Enabled(1); List31 << Horizontal Alignment("Default"); List31 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List31 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List31 << Text Color("None"); List31 << UI Only(0); List31 << Vertical Alignment("Default"); List31 << Visibility("Visible"); List31 << Set Min Size(120, 485); List31 << Set Max Size(120, 485); List31 << Set Stretch({"Neutral", "Neutral"}); List31 << set horizontal(0); Panel2 << Background Color("None"); Panel2 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel2 << Enabled(1); Panel2 << Horizontal Alignment("Default"); Panel2 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel2 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel2 << Text Color("None"); Panel2 << UI Only(0); Panel2 << Vertical Alignment("Default"); Panel2 << Visibility("Visible"); Panel2 << Set Min Size(100, 77); Panel2 << Set Max Size(100, 77); Panel2 << Set Stretch({"Neutral", "Neutral"}); Panel2 << Set Title(""); OKbutton << Background Color("None"); OKbutton << Border({Left(0), Top(0), Right(0), Bottom(0)}); OKbutton << Enabled(1); OKbutton << Horizontal Alignment("Default"); OKbutton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); OKbutton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); OKbutton << Text Color("None"); OKbutton << UI Only(0); OKbutton << Vertical Alignment("Default"); OKbutton << Visibility("Visible"); OKbutton << Set Min Size(60, 19); OKbutton << Set Max Size(60, 19); OKbutton << Set Stretch({"Off", "Off"}); OKbutton << Set Button Name("OK"); OKbutton << Style("Normal"); OKbutton << Set(0); OKbutton << Set Icon(""); OKbutton << Set Icon Location("Right"); OKbutton << Set Function(OKbuttonPress); Panel3 << Background Color("None"); Panel3 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel3 << Enabled(1); Panel3 << Horizontal Alignment("Default"); Panel3 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel3 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel3 << Text Color("None"); Panel3 << UI Only(0); Panel3 << Vertical Alignment("Default"); Panel3 << Visibility("Visible"); Panel3 << Set Min Size(100, 77); Panel3 << Set Max Size(100, 77); Panel3 << Set Stretch({"Neutral", "Neutral"}); Panel3 << Set Title(""); CancelButton << Background Color("None"); CancelButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); CancelButton << Enabled(1); CancelButton << Horizontal Alignment("Default"); CancelButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); CancelButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); CancelButton << Text Color("None"); CancelButton << UI Only(0); CancelButton << Vertical Alignment("Default"); CancelButton << Visibility("Visible"); CancelButton << Set Min Size(60, 19); CancelButton << Set Max Size(60, 19); CancelButton << Set Stretch({"Off", "Off"}); CancelButton << Set Button Name("Cancel"); CancelButton << Style("Normal"); CancelButton << Set(0); CancelButton << Set Icon(""); CancelButton << Set Icon Location("Right"); CancelButton << Set Function(CancelButtonPress); Panel4 << Background Color("None"); Panel4 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel4 << Enabled(1); Panel4 << Horizontal Alignment("Default"); Panel4 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel4 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel4 << Text Color("None"); Panel4 << UI Only(0); Panel4 << Vertical Alignment("Default"); Panel4 << Visibility("Visible"); Panel4 << Set Min Size(100, 77); Panel4 << Set Max Size(100, 77); Panel4 << Set Stretch({"Neutral", "Neutral"}); Panel4 << Set Title(""); RemoveButton << Background Color("None"); RemoveButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); RemoveButton << Enabled(1); RemoveButton << Horizontal Alignment("Default"); RemoveButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); RemoveButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); RemoveButton << Text Color("None"); RemoveButton << UI Only(0); RemoveButton << Vertical Alignment("Default"); RemoveButton << Visibility("Visible"); RemoveButton << Set Min Size(60, 19); RemoveButton << Set Max Size(60, 19); RemoveButton << Set Stretch({"Off", "Off"}); RemoveButton << Set Button Name("Remove"); RemoveButton << Style("Normal"); RemoveButton << Set(0); RemoveButton << Set Icon(""); RemoveButton << Set Icon Location("Right"); RemoveButton << Set Function(RemoveButtonPress); Panel5 << Background Color("None"); Panel5 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel5 << Enabled(1); Panel5 << Horizontal Alignment("Default"); Panel5 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel5 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel5 << Text Color("None"); Panel5 << UI Only(0); Panel5 << Vertical Alignment("Default"); Panel5 << Visibility("Visible"); Panel5 << Set Min Size(100, 77); Panel5 << Set Max Size(100, 77); Panel5 << Set Stretch({"Neutral", "Neutral"}); Panel5 << Set Title(""); RecallButton << Background Color("None"); RecallButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); RecallButton << Enabled(1); RecallButton << Horizontal Alignment("Default"); RecallButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); RecallButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); RecallButton << Text Color("None"); RecallButton << UI Only(0); RecallButton << Vertical Alignment("Default"); RecallButton << Visibility("Visible"); RecallButton << Set Min Size(60, 19); RecallButton << Set Max Size(60, 19); RecallButton << Set Stretch({"Off", "Off"}); RecallButton << Set Button Name("Recall"); RecallButton << Style("Normal"); RecallButton << Set(0); RecallButton << Set Icon(""); RecallButton << Set Icon Location("Right"); RecallButton << Set Function(RecallButtonPress); Panel6 << Background Color("None"); Panel6 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Panel6 << Enabled(1); Panel6 << Horizontal Alignment("Default"); Panel6 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Panel6 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Panel6 << Text Color("None"); Panel6 << UI Only(0); Panel6 << Vertical Alignment("Default"); Panel6 << Visibility("Visible"); Panel6 << Set Min Size(100, 77); Panel6 << Set Max Size(100, 77); Panel6 << Set Stretch({"Neutral", "Neutral"}); Panel6 << Set Title(""); ResetButton << Background Color("None"); ResetButton << Border({Left(0), Top(0), Right(0), Bottom(0)}); ResetButton << Enabled(1); ResetButton << Horizontal Alignment("Default"); ResetButton << Margin({Left(2), Top(2), Right(2), Bottom(2)}); ResetButton << Padding({Left(0), Top(0), Right(0), Bottom(0)}); ResetButton << Text Color("None"); ResetButton << UI Only(0); ResetButton << Vertical Alignment("Default"); ResetButton << Visibility("Visible"); ResetButton << Set Min Size(60, 19); ResetButton << Set Max Size(60, 19); ResetButton << Set Stretch({"Off", "Off"}); ResetButton << Set Button Name("Reset"); ResetButton << Style("Normal"); ResetButton << Set(0); ResetButton << Set Icon(""); ResetButton << Set Icon Location("Right"); ResetButton << Set Function(ResetButtonPress); List7 << Background Color("None"); List7 << Border({Left(0), Top(0), Right(0), Bottom(0)}); List7 << Enabled(1); List7 << Horizontal Alignment("Default"); List7 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); List7 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); List7 << Text Color("None"); List7 << UI Only(0); List7 << Vertical Alignment("Default"); List7 << Visibility("Visible"); List7 << Set Min Size(117, 36); List7 << Set Max Size(117, 36); List7 << Set Stretch({"Neutral", "Neutral"}); List7 << set horizontal(0); Text1 << Background Color("None"); Text1 << Border({Left(0), Top(0), Right(0), Bottom(0)}); Text1 << Enabled(1); Text1 << Horizontal Alignment("Center"); Text1 << Margin({Left(0), Top(0), Right(0), Bottom(0)}); Text1 << Padding({Left(0), Top(0), Right(0), Bottom(0)}); Text1 << Text Color("Text"); Text1 << UI Only(0); Text1 << Vertical Alignment("Center"); Text1 << Visibility("Visible"); Text1 << Set Min Size(97, 16); Text1 << Set Max Size(97, 16); Text1 << Set Stretch({"Off", "Off"}); Text1 << Set Base Font("Text"); Text1 << Set Font Name("Segoe UI Light"); Text1 << Set Font Style("Plain"); Text1 << Set Font Size(9); Text1 << Set Font Scale(1); Text1 << Set Text("Predictor-Explainer"); Text1 << Bullet point(0); Text1 << Justify Text("Left"); Text1 << Rotate Text("Horizontal"); Text1 << Set Width(-1); Text1 << Set Wrap(360); Text1 << Set Tip("")))), Initialize(Module1 << Auto Launch(1); Module1 << Set Module Type("Report"); Module1 << Set Window Title("^TABLENAME - ^APPNAME")))
