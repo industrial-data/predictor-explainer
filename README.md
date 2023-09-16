@@ -1,6 +1,6 @@
 # Predictor Explainer
 
-AutoML and ExplainableAI for JMP (+Python)
+AutoML and ExplainableAI for JMP (+Python) 
 
 [Download latest version](https://github.com/industrial-data/predictor-explainer/raw/main/Latest_PredictorExplainer.jmpaddin)
 
@@ -27,7 +27,9 @@ Download and click the . **jmpaddin** file to install Predictor Explainer:
 
 If you have a previous version installed, it will be automatically removed.
 
-Optional: [PyJMP (Python for JMP)](https://github.com/industrial-data/pyjmp) can also be installed (SHAP plots).
+Optional: [PyJMP (Python for JMP (Windows only))](https://github.com/industrial-data/pyjmp) can also be installed (SHAP plots will be generated in JMP).
+If you have Mac or another Python installation, you can still run the notebook included in the folder by clicking on the button "code|examples".
+Temporary CSVs will be generated inside the 'temp'.
 
 
 ## 2 – Example: Distillation column (continuous process)
