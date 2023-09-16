@@ -1,7 +1,6 @@
 # Predictor Explainer
 
-AutoML and ExplainableAI for JMP (+Python) 
-
+AutoML and ExplainableAI for JMP (+Python) for Windows and Mac
 [Download latest version](https://github.com/industrial-data/predictor-explainer/raw/main/Latest_PredictorExplainer.jmpaddin)
 
 Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. If [PyJMP](https://github.com/industrial-data/pyJMP/) is installed (**optional**), SHAP plots and UMAP will be automatically calculated as well.
@@ -29,7 +28,7 @@ If you have a previous version installed, it will be automatically removed.
 
 Optional: [PyJMP (Python for JMP (Windows only))](https://github.com/industrial-data/pyjmp) can also be installed (SHAP plots will be generated in JMP).
 If you have Mac or another Python installation, you can still run the notebook included in the folder by clicking on the button "code|examples".
-Temporary CSVs will be generated inside the 'temp'.
+Temporary CSVs will be generated inside the 'temp' folder.
 
 
 ## 2 – Example: Distillation column (continuous process)
