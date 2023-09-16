@@ -9,6 +9,7 @@ Predictor explainer automates the screening of process variables using feature e
 For further details and applications of ML applied to industrial processes, you can have a look at our open-access review:
 
 * [Industrial data science – a review of machine learning applications for chemical and process industries](https://pubs.rsc.org/en/content/articlelanding/2022/re/d1re00541c)
+* [Industrial Data Science for Batch Manufacturing Processes](https://arxiv.org/abs/2209.09660)
 
 ![](/media/image1.png)
 
