@@ -93,6 +93,9 @@ If no output is given (no Y, only X's), Predictor screening identifies the senso
 
 ![](/media/image13.png)
 
+Predictor explainer will calculate the rate of change of all the sensors if row differences is activated. 
+![](/media/image14.png)
+
 ## Creating your own version of the add-in
 
 If you want to distribute or modify a new version of the JMP addin, there are two important things to consider.
