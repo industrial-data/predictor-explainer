@@ -28,7 +28,9 @@ Download and click the . **jmpaddin** file to install Predictor Explainer:
 
 If you have a previous version installed, it will be automatically removed.
 
-SHAP plots use JMP 19's embedded Python on both Windows and Mac — no separate Python installation is needed. The first time you run the analysis with the SHAP option active (or when you click "Install packages"), the add-in installs numpy, pandas, shap and lightgbm with JMP's native pip. Only packages with prebuilt binary wheels are used, so no compiler is required.
+SHAP plots use JMP 19's embedded Python on both Windows and Mac — no separate Python installation is needed. The first time you run the analysis with the SHAP option active (or when you click "Install packages"), the add-in installs numpy, pandas, shap and lightgbm with JMP's native pip. Only packages with prebuilt binary wheels are used, so no compiler is required. If the packages are already installed and working, the "Install packages" button offers to update them to the latest versions.
+
+**Mac only:** LightGBM additionally needs the OpenMP runtime, which its wheels do not bundle. Install it once with [Homebrew](https://brew.sh): `brew install libomp`. The add-in detects this situation and shows the same instruction.
 
 
 ## 2 – Example: Distillation column (continuous process)

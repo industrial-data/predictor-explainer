@@ -205,10 +205,27 @@ ShowPredictorExplainerMessage = Function( {title, message},
 		title,
 		<<Modal,
 		V List Box(
-			Text Box( message ),
+			Text Box( message, <<Set Wrap( 400 ) ),
 			Button Box( "OK" )
 		)
 	)
+);
+
+CheckPythonPackagesReady = Function( {},
+	{ready},
+	ready = 0;
+	Try(
+		Python Submit(
+			"\[
+pe_packages_ready = 1
+try:
+    import numpy, pandas, shap, lightgbm
+except Exception:
+    pe_packages_ready = 0
+]\" );
+		ready = Python Get( pe_packages_ready );
+	);
+	If( ready == 1, 1, 0 );
 );
 
 FindPredictorExplainerPythonFile = Function( {file_name},
@@ -250,7 +267,7 @@ KeepExistingColumns = Function( {source_dt, source_list},
 	Return( kept_names );
 );
 
-InstallPythonPackages = Function( {this},
+InstallPythonPackagesCore = Function( {},
 	{install_file},
 	install_file = FindPredictorExplainerPythonFile( "predictor_explainer_install.py" );
 
@@ -264,10 +281,32 @@ InstallPythonPackages = Function( {this},
 		Return();
 	);
 
+	// If everything already imports, ask before replacing the installed versions;
+	// broken or missing packages are repaired without asking
+	pe_install_update = 0;
+	If( CheckPythonPackagesReady() == 1,
+		New Window( "Python Packages",
+			<<Modal,
+			V List Box(
+				Text Box( "All required Python packages are already installed and working." ),
+				Text Box( "Do you want to update them to the latest versions?" ),
+				H List Box(
+					Button Box( "Update", pe_install_update = 1 ),
+					Button Box( "Keep current versions", pe_install_update = 0 )
+				)
+			)
+		);
+		If( pe_install_update == 0,
+			pe_install_ok = 1;
+			Return();
+		);
+	);
+
 	Clear Log();
 	Python Reset();
 
 	Try(
+		Python Send( pe_install_update );
 		Python Submit File( install_file );
 		pe_install_ok = Python Get( pe_install_ok );
 		pe_install_message = Python Get( pe_install_message );
@@ -281,6 +320,14 @@ InstallPythonPackages = Function( {this},
 		Open Log( 1 );
 		ShowPredictorExplainerMessage( "Python Package Install Failed", pe_install_message );
 	);
+);
+
+InstallPythonPackages = Function( {this},
+	// Grey out the button so the install cannot be triggered twice
+	Try( PythonButton << Enabled( 0 ) );
+	Wait( 0 );
+	InstallPythonPackagesCore();
+	Try( PythonButton << Enabled( 1 ) );
 );
 
 OKbuttonPress=Function({this},
@@ -1968,21 +2015,9 @@ OKbuttonPress=Function({this},
 	);
 
 	// First use: install any missing packages with JMP's embedded pip
-	pe_packages_ready = 0;
-	Try(
-		Python Submit(
-			"\[
-pe_packages_ready = 1
-try:
-    import numpy, pandas, shap, lightgbm
-except Exception:
-    pe_packages_ready = 0
-]\" );
-		pe_packages_ready = Python Get( pe_packages_ready );
-	);
-	If( pe_packages_ready == 1,
+	If( CheckPythonPackagesReady() == 1,
 		print( "Required Python packages are already installed" ),
-		print( "Required Python packages are missing; installing them with JMP pip" );
+		print( "Required Python packages are missing or broken; repairing them with JMP pip" );
 		InstallPythonPackages( 0 );
 		If( pe_install_ok != 1, Throw() );
 	);
@@ -2065,6 +2100,11 @@ except Exception:
 		ShowPredictorExplainerMessage( "Python SHAP Failed", "Python finished but result tables could not be returned to JSL. Review the JMP log." );
 		Throw();
 	);
+
+	// Python result tables arrive visible; keep them as hidden working tables
+	Try( dt_global_shap_values << Show Window( 0 ) );
+	Try( dt_shap_values << Show Window( 0 ) );
+	Try( dt_shap_plot_table << Show Window( 0 ) );
 		
 	// For debugging, uncomment these to unhide these tables 
 	// dt_shap_plot_table << ShowWindow( 1 );

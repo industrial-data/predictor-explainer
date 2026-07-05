@@ -27,6 +27,8 @@ import shap
 from lightgbm.sklearn import LGBMRegressor
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+# pandas 3 deprecates the dataframe interchange protocol that jmp.from_dataframe consumes
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 def _as_list(value):
@@ -120,7 +122,7 @@ def _add_time_features(x_frame, time_series):
 
 
 def _fit_tree_model(x_frame, y_series, weights, n_trees):
-    model = LGBMRegressor(n_estimators=n_trees)
+    model = LGBMRegressor(n_estimators=n_trees, verbosity=-1)
 
     if weights is not None:
         model.fit(x_frame, y_series, sample_weight=np.asarray(weights).flatten())
@@ -136,12 +138,19 @@ def _publish_table(frame, name):
         if pd.api.types.is_object_dtype(jmp_frame[col]) or pd.api.types.is_string_dtype(jmp_frame[col]):
             jmp_frame[col] = jmp_frame[col].astype("string").fillna("")
 
-    table = jmp.from_dataframe(jmp_frame, True, False, visibility="invisible")
-    table.name = name
+    # jmp.from_dataframe takes only the dataframe; JSL hides the tables after Python Get
+    table = jmp.from_dataframe(jmp_frame)
+    try:
+        table.name = name
+    except Exception:
+        print(f"Could not rename result table to {name}; keeping the default name.")
     return table
 
 
 def _run_analysis():
+    # JSL retrieves the result tables from the Python globals with Python Get()
+    global pe_global_shap_dt, pe_shap_values_dt, pe_shap_plot_dt
+
     tic = time.time()
 
     input_df = _to_pandas(_get_global("pe_input_dt"))
@@ -225,12 +234,12 @@ def _run_analysis():
     uniform_noise = np.random.uniform(size=len(x_model))
     shuffled_y = y.to_numpy().copy()
     np.random.shuffle(shuffled_y)
-    x_model["Normal Noise"] = normal_noise
-    x_model["Uniform Noise"] = uniform_noise
-    x_model["Shuffle Yield Noise"] = shuffled_y
-    display_name["Normal Noise"] = "Normal Noise"
-    display_name["Uniform Noise"] = "Uniform Noise"
-    display_name["Shuffle Yield Noise"] = "Shuffle Yield Noise"
+    x_model["Normal_Noise"] = normal_noise
+    x_model["Uniform_Noise"] = uniform_noise
+    x_model["Shuffle_Yield_Noise"] = shuffled_y
+    display_name["Normal_Noise"] = "Normal Noise"
+    display_name["Uniform_Noise"] = "Uniform Noise"
+    display_name["Shuffle_Yield_Noise"] = "Shuffle Yield Noise"
 
     model, model_x, model_name = _fit_tree_model(x_model, y, weights, n_trees)
     explainer = shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")
@@ -257,7 +266,7 @@ def _run_analysis():
     ).sort_values(by="mean", ascending=False)
 
     ordered_model_cols = df_global_shap_values["model_column"].tolist()
-    noise_cols = ["Shuffle Yield Noise", "Normal Noise", "Uniform Noise"]
+    noise_cols = ["Shuffle_Yield_Noise", "Normal_Noise", "Uniform_Noise"]
     noise_positions = [ordered_model_cols.index(col) for col in noise_cols if col in ordered_model_cols]
     noise_cut_position = min(noise_positions) if noise_positions else len(ordered_model_cols)
     noise_col = ordered_model_cols[noise_cut_position] if noise_positions else ordered_model_cols[-1]
