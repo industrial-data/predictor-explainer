@@ -3,7 +3,7 @@
 AutoML and ExplainableAI for JMP (+Python) for Windows and Mac
 [Download latest version](https://github.com/industrial-data/predictor-explainer/raw/main/Latest_PredictorExplainer.jmpaddin)
 
-Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. If [PyJMP](https://github.com/industrial-data/pyJMP/) is installed (**optional**), SHAP plots and UMAP will be automatically calculated as well.
+Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. On JMP 19 (Windows and Mac), SHAP plots are calculated with JMP's embedded Python using a LightGBM model; the required packages (numpy, pandas, shap, lightgbm) are installed automatically with JMP's native pip on first use.
 
 For further details and applications of ML applied to industrial processes, you can have a look at our open-access review:
 
@@ -28,9 +28,7 @@ Download and click the . **jmpaddin** file to install Predictor Explainer:
 
 If you have a previous version installed, it will be automatically removed.
 
-Optional: [PyJMP (Python for JMP (Windows only))](https://github.com/industrial-data/pyjmp) can also be installed (SHAP plots will be generated in JMP).
-If you have Mac or another Python installation, you can still run the notebook included in the folder by clicking on the button "code|examples".
-Temporary CSVs will be generated inside the 'temp' folder.
+SHAP plots use JMP 19's embedded Python on both Windows and Mac — no separate Python installation is needed. The first time you run the analysis with the SHAP option active (or when you click "Install packages"), the add-in installs numpy, pandas, shap and lightgbm with JMP's native pip. Only packages with prebuilt binary wheels are used, so no compiler is required.
 
 
 ## 2 – Example: Distillation column (continuous process)
@@ -53,7 +51,7 @@ Predictor explainer contains example files. To open the folder, click in the but
 
 (A) The add-in folder contains other example files and a python code
 
-(B) If pyJMP is installed, additional options for SHAP and UMAP will be shown.
+(B) On JMP 19, activate the "SHAP plot (Python)" option to compute SHAP values with the embedded Python.
 
 ![](/media/image4.png)
 
@@ -69,11 +67,11 @@ A hidden and temporal table with all the pre-selected predictors, target and tim
 
 ![](/media/image6.png)
 
-If PyJMP is installed and the option to show SHAP plots is activated, an interactive violin plot will appear after the analysis.
+If the option to show SHAP plots is activated, an interactive violin plot will appear after the analysis.
 
 ![](/media/image7.png)
 
-Additional hidden tables containing SHAP, UMAP and clustering results will be accessible via the home menu.
+Additional hidden tables containing the SHAP results will be accessible via the home menu.
 
 ## 3 – Example: Batch data analysis
 
@@ -100,7 +98,9 @@ Predictor explainer will calculate the rate of change of all the sensors if row 
 
 If you want to distribute or modify a new version of the JMP addin, there are two important things to consider.
 
-1. Changing the Jupyter notebook will not require changing the JMP add-in itself, as JMP calls the Python code independently via PyJMP. JMP will generate temporary files to communicate with Python and then read the results. The Jupyter Notebooks contains all the steps, to access it open the folder clicking the button on bottom left corner. There is one executable called open\_notebook.bat which will allow you to modify the jupyter that is executed.
+1. The add-in runs two scripts in the `native_python` folder with JMP 19's embedded Python: `predictor_explainer_install.py` (installs the required packages with JMP's native pip) and `predictor_explainer_shap.py` (fits a LightGBM model, computes the SHAP values and returns the result tables directly to JMP, without temporary files).
+
+1. To rebuild `Latest_PredictorExplainer.jmpaddin` after changing the app source (`code/pred_explainer_addin_v2.0.jmpappsource`) or the Python scripts, run `python3 code/build_addin.py` — it repackages the add-in exactly as JMP's Add-In Builder would export it.
 
 1. When modifying the JML add-in source code and saving it (exporting application), make sure to keep the same Unique ID:
 
