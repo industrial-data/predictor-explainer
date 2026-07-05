@@ -24,7 +24,15 @@ import jmp
 import numpy as np
 import pandas as pd
 import shap
-from lightgbm.sklearn import LGBMRegressor
+from sklearn.ensemble import RandomForestRegressor
+
+try:
+    from lightgbm.sklearn import LGBMRegressor
+except Exception:
+    # On Mac the LightGBM wheel needs the OpenMP runtime (brew install libomp);
+    # without it the slower scikit-learn RandomForest is used instead
+    LGBMRegressor = None
+    print("LightGBM is not available; using the scikit-learn RandomForest fallback.")
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 # pandas 3 deprecates the dataframe interchange protocol that jmp.from_dataframe consumes
@@ -122,14 +130,21 @@ def _add_time_features(x_frame, time_series):
 
 
 def _fit_tree_model(x_frame, y_series, weights, n_trees):
-    model = LGBMRegressor(n_estimators=n_trees, verbosity=-1)
+    if LGBMRegressor is not None:
+        model = LGBMRegressor(n_estimators=n_trees, verbosity=-1)
+        model_x = x_frame
+        model_name = "LightGBM"
+    else:
+        model = RandomForestRegressor(n_estimators=n_trees, random_state=42, n_jobs=-1)
+        model_x = x_frame.fillna(x_frame.median(numeric_only=True)).fillna(0)
+        model_name = "RandomForestRegressor"
 
     if weights is not None:
-        model.fit(x_frame, y_series, sample_weight=np.asarray(weights).flatten())
+        model.fit(model_x, y_series, sample_weight=np.asarray(weights).flatten())
     else:
-        model.fit(x_frame, y_series)
+        model.fit(model_x, y_series)
 
-    return model, x_frame, "LightGBM"
+    return model, model_x, model_name
 
 
 def _publish_table(frame, name):
@@ -326,6 +341,9 @@ def _run_analysis():
         f"Rows: {len(y)}. Selected features: {len(selected_model_cols)}. Seconds: {elapsed}."
     )
 
+
+# JSL reads this to tell the user when the slower fallback model was used
+pe_model_fallback = 1 if LGBMRegressor is None else 0
 
 try:
     pe_run_message = _run_analysis()

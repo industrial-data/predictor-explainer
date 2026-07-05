@@ -3,7 +3,7 @@
 AutoML and ExplainableAI for JMP (+Python) for Windows and Mac
 [Download latest version](https://github.com/industrial-data/predictor-explainer/raw/main/Latest_PredictorExplainer.jmpaddin)
 
-Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. On JMP 19 (Windows and Mac), SHAP plots are calculated with JMP's embedded Python using a LightGBM model; the required packages (numpy, pandas, shap, lightgbm) are installed automatically with JMP's native pip on first use.
+Predictor explainer automates the screening of process variables using feature engineering and machine learning (known as AutoML). Parallel coordinate plots and trends will be automatically shown to interpret the results. On JMP 19 (Windows and Mac), SHAP plots are calculated with JMP's embedded Python using a LightGBM model (with an automatic scikit-learn fallback where LightGBM is unavailable); the required packages are installed automatically with JMP's native pip on first use.
 
 For further details and applications of ML applied to industrial processes, you can have a look at our open-access review:
 
@@ -11,6 +11,14 @@ For further details and applications of ML applied to industrial processes, you 
 * Book chapter - [Industrial Data Science for Batch Manufacturing Processes](https://arxiv.org/abs/2209.09660)
 
 * Batch demo - [Predictor Explainer at JMP Discovery Summit 2023](https://community.jmp.com/t5/Discovery-Summit-Europe-2023/Industrial-Data-Science-for-Batch-Manufacturing-Processes-2023/ta-p/572636?trMode=source)
+
+## User guides
+
+GitHub shows HTML files as source code, so use these links to read the guides rendered in the browser:
+
+* Dryer dataset walkthrough (Python code, HTML) - [view in browser](https://raw.githack.com/industrial-data/predictor-explainer/main/code/python-only/Dryer_dataset_Imanol_et_al_2022_code.html)
+* Dryer dataset walkthrough (Jupyter notebook) - [view on nbviewer](https://nbviewer.org/github/industrial-data/predictor-explainer/blob/main/code/python-only/Dryer_dataset_Imanol_et_al_2022_code.ipynb)
+* [Installation and user manual (Word)](https://github.com/industrial-data/predictor-explainer/raw/main/doc/Predictor_Explainer%20(Installation%20and%20User%20Manual).docx)
 
 ![](/media/image1.png)
 
@@ -28,9 +36,9 @@ Download and click the . **jmpaddin** file to install Predictor Explainer:
 
 If you have a previous version installed, it will be automatically removed.
 
-SHAP plots use JMP 19's embedded Python on both Windows and Mac — no separate Python installation is needed. The first time you run the analysis with the SHAP option active (or when you click "Install packages"), the add-in installs numpy, pandas, shap and lightgbm with JMP's native pip. Only packages with prebuilt binary wheels are used, so no compiler is required. If the packages are already installed and working, the "Install packages" button offers to update them to the latest versions.
+SHAP plots use JMP 19's embedded Python on both Windows and Mac — no separate Python installation is needed. The first time you run the analysis with the SHAP option active (or when you click "Install packages"), the add-in installs numpy, pandas, scikit-learn, shap and (when possible) lightgbm with JMP's native pip. Only packages with prebuilt binary wheels are used, so no compiler is required. If the packages are already installed and working, the "Install packages" button offers to update them to the latest versions.
 
-**Mac only:** LightGBM additionally needs the OpenMP runtime, which its wheels do not bundle. Install it once with [Homebrew](https://brew.sh): `brew install libomp`. The add-in detects this situation and shows the same instruction.
+**Mac only:** LightGBM needs the OpenMP runtime, which its wheels do not bundle. If it is missing, the add-in automatically falls back to scikit-learn's RandomForest, so SHAP still works — just slower. To enable the faster LightGBM, install [Homebrew](https://brew.sh) and run `brew install libomp` once; no reinstall of the add-in or packages is needed afterwards.
 
 
 ## 2 – Example: Distillation column (continuous process)

@@ -219,7 +219,7 @@ CheckPythonPackagesReady = Function( {},
 			"\[
 pe_packages_ready = 1
 try:
-    import numpy, pandas, shap, lightgbm
+    import numpy, pandas, sklearn, shap
 except Exception:
     pe_packages_ready = 0
 ]\" );
@@ -2085,6 +2085,17 @@ OKbuttonPress=Function({this},
 		Open Log( 1 );
 		ShowPredictorExplainerMessage( "Python SHAP Failed", pe_run_message );
 		Throw();
+	);
+
+	// Tell the user (once per JMP session) when the slower fallback model was used
+	pe_model_fallback = 0;
+	Try( pe_model_fallback = Python Get( pe_model_fallback ) );
+	If( pe_model_fallback == 1 & Try( ::pe_fallback_notice_shown, 0 ) != 1,
+		::pe_fallback_notice_shown = 1;
+		ShowPredictorExplainerMessage(
+			"SHAP Model Note",
+			"LightGBM is not available, so the slower scikit-learn RandomForest was used for the SHAP analysis. On Mac you can speed this up by installing the OpenMP runtime once: run 'brew install libomp' in Terminal (requires Homebrew, see brew.sh). The next analysis will then use LightGBM automatically."
+		);
 	);
 
 	Try(Close(dt_global_shap_values, "No Save" ));

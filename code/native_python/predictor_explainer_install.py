@@ -23,7 +23,14 @@ except ImportError:
 REQUIRED_PACKAGES = [
     {"spec": "numpy", "dist": "numpy", "import_name": "numpy", "only_binary": True},
     {"spec": "pandas", "dist": "pandas", "import_name": "pandas", "only_binary": True},
+    {"spec": "scikit-learn", "dist": "scikit-learn", "import_name": "sklearn", "only_binary": True},
     {"spec": "shap", "dist": "shap", "import_name": "shap", "only_binary": True},
+]
+
+# LightGBM is the preferred (faster) model, but on Mac its wheel needs the
+# OpenMP runtime (brew install libomp); without it the analysis falls back
+# to scikit-learn's RandomForest, so a LightGBM failure is not fatal.
+OPTIONAL_PACKAGES = [
     {"spec": "lightgbm", "dist": "lightgbm", "import_name": "lightgbm", "only_binary": True},
 ]
 
@@ -111,8 +118,9 @@ def install_and_verify(package, update=False):
 def _failure_hint(error_text):
     if "libomp" in error_text and sys.platform == "darwin":
         return (
-            "LightGBM needs the OpenMP runtime on Mac. Install it once by running "
-            "'brew install libomp' in Terminal, then click Install packages again."
+            "To enable the faster LightGBM on Mac, install the OpenMP runtime once by "
+            "running 'brew install libomp' in Terminal (requires Homebrew, see brew.sh). "
+            "No reinstall is needed afterwards."
         )
     return None
 
@@ -137,6 +145,7 @@ def _install_group(packages, update=False):
 try:
     pe_do_update = bool(globals().get("pe_install_update", 0))
     pe_install_failures, pe_install_hints = _install_group(REQUIRED_PACKAGES, update=pe_do_update)
+    pe_optional_failures, pe_optional_hints = _install_group(OPTIONAL_PACKAGES, update=pe_do_update)
 
     if pe_install_failures:
         pe_install_ok = 0
@@ -147,6 +156,14 @@ try:
         )
         if pe_install_hints:
             pe_install_message += " " + " ".join(pe_install_hints)
+    elif pe_optional_failures:
+        pe_install_ok = 1
+        pe_install_message = (
+            "Core packages are installed, but LightGBM is not available, so the SHAP "
+            "analysis will use the slower scikit-learn RandomForest instead."
+        )
+        if pe_optional_hints:
+            pe_install_message += " " + " ".join(pe_optional_hints)
     elif pe_do_update:
         pe_install_ok = 1
         pe_install_message = "Required Python packages are updated to the latest versions."
