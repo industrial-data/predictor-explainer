@@ -54,7 +54,7 @@ Go to the Add-ins menu and open Predictor Explainer.
 Predictor explainer contains example files. To open the folder, click in the button on the bottom left corner (see A in image below). The following steps are using the file '_distillation\_column\_na.jmp'_.
 
 1. Select a target (Y)
-2. Add all the input variables or predictors (X)
+2. Add all the input variables or predictors (X). Since v3.0, character (categorical) columns are accepted as X too: they are encoded with JMP's model parameterizations — effect coding (+1/0/-1) for nominal columns, cumulative coding for ordinal ones — into columns named like `Color[Red]`, exactly as `Design Nom()` / `Design Ord()` would.
 3. You can pass extra information such as date, supplementary information or weights. Grouping variables, will be used to create summary statistics before the analysis is done (automatic feature engineering).
 4. You can specify several options, such as the creating of differences for all the input variables, the number of trees in the bootstrap forest, and the threshold for the signal to noise ratio.
 5. Predictor Explainer will create a subset of the table and show the analysis results
@@ -97,7 +97,7 @@ If there is information about product (grade) or phase (stage) of the batch, the
 
 In the example, Predictor Explainer identified the strongest sensor (tag) in terms of correlation (supervised learning). ![](/media/image10.png)
 
-If no output is given (no Y, only X's), Predictor screening identifies the sensor with highest variability and creates a global anomaly score (unsupervised learning). 
+If no output is given (no Y, only X's), a global anomaly score is used as the target (unsupervised learning). Since v3.0 this score comes from an Isolation Forest implemented in pure JSL (no Python needed for it), which replaces the previous KNN-distance approach and also handles the encoded categorical predictors. 
 
 ![](/media/image13.png)
 
@@ -110,7 +110,9 @@ If you want to distribute or modify a new version of the JMP addin, there are tw
 
 1. The add-in runs two scripts in the `native_python` folder with JMP 19's embedded Python: `predictor_explainer_install.py` (installs the required packages with JMP's native pip) and `predictor_explainer_shap.py` (fits a LightGBM model, computes the SHAP values and returns the result tables directly to JMP, without temporary files).
 
-1. To rebuild `Latest_PredictorExplainer.jmpaddin` after changing the app source (`code/pred_explainer_addin_v2.0.jmpappsource`) or the Python scripts, run `python3 code/build_addin.py` — it repackages the add-in exactly as JMP's Add-In Builder would export it.
+1. The pure-JSL engine (`code/jsl/pe_native_engine.jsl`, namespace `pe_engine`) provides the Isolation Forest used for the anomaly score and the categorical encoder; it ships inside the add-in under `jsl/`.
+
+1. To rebuild `Latest_PredictorExplainer.jmpaddin` after changing the app source (`code/pred_explainer_addin_v3.0.jmpappsource`), the Python scripts or the JSL engine, run `python3 code/build_addin.py` — it repackages the add-in exactly as JMP's Add-In Builder would export it.
 
 1. When modifying the JML add-in source code and saving it (exporting application), make sure to keep the same Unique ID:
 

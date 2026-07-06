@@ -15,16 +15,20 @@ from xml.sax.saxutils import escape
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-APP_SOURCE = REPO_ROOT / "code" / "pred_explainer_addin_v2.0.jmpappsource"
+APP_SOURCE = REPO_ROOT / "code" / "pred_explainer_addin_v3.0.jmpappsource"
 OUTPUT = REPO_ROOT / "Latest_PredictorExplainer.jmpaddin"
 
-DISPLAY_VERSION = "v.2.0"
-ADDIN_VERSION = "260705"  # numeric date so JMP replaces older installed versions
+DISPLAY_VERSION = "v.3.0"
+ADDIN_VERSION = "260706"  # numeric date so JMP replaces older installed versions
 MIN_JMP_VERSION = "19"  # embedded Python with jmp/jmputils modules
 
 PYTHON_SCRIPTS = [
     REPO_ROOT / "code" / "native_python" / "predictor_explainer_install.py",
     REPO_ROOT / "code" / "native_python" / "predictor_explainer_shap.py",
+]
+
+JSL_FILES = [
+    REPO_ROOT / "code" / "jsl" / "pe_native_engine.jsl",
 ]
 
 DATA_FILES = [
@@ -76,6 +80,8 @@ def build():
         addin.writestr("addin.jmpcust", jmpcust)
         for script in PYTHON_SCRIPTS:
             addin.write(script, f"native_python/{script.name}")
+        for jsl_file in JSL_FILES:
+            addin.write(jsl_file, f"jsl/{jsl_file.name}")
         for data_file in DATA_FILES:
             addin.write(data_file, data_file.name)
 

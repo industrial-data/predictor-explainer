@@ -100,10 +100,12 @@ def install_and_verify(package, update=False):
             force_reinstall = True
 
     command_args = ["install"]
-    if update or force_reinstall:
-        command_args.append("--upgrade")
     if force_reinstall:
-        command_args.append("--force-reinstall")
+        # replace only the broken package itself; upgrading its dependencies
+        # here can break other packages (e.g. numpy past what numba supports)
+        command_args.extend(["--force-reinstall", "--no-deps"])
+    elif update:
+        command_args.append("--upgrade")
     if package["only_binary"]:
         command_args.append("--only-binary=:all:")
 

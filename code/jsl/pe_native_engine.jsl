@@ -1,0 +1,525 @@
+/*******************************************************************************
+ Predictor Explainer native JSL engine (Isolation Forest + categorical coding)
+
+ Isolation Forest adapted from the Isolation Forest v1.2 add-in (namespace
+ renamed to pe_engine so both add-ins can coexist). Five isotree methods:
+   iForest    IsolationForest(ndim=1, sample_size=256, max_depth=8,  ntrees=100)
+   EIF        IsolationForest(ndim=2, sample_size=256, max_depth=8,  ntrees=100,
+                              coefs="uniform", standardize_data=False)
+   SciForest  IsolationForest(ndim=2, sample_size=256, max_depth=8,  ntrees=100,
+                              ntry=10, prob_pick_avg_gain=1, penalize_range=True)
+   FCF        IsolationForest(ndim=2, sample_size=256, max_depth=None, ntrees=200,
+                              coefs="normal", ntry=1, prob_pick_pooled_gain=1)
+   RRCF       IsolationForest(ndim=1, prob_pick_col_by_range=1, sample_size=256,
+                              max_depth=None, ntrees=100)
+
+ Scores follow Liu et al. (2008): score = 2^(-E[h(x)] / c(sample_size)),
+ in (0,1], higher = more anomalous (same convention as isotree's predict()).
+
+ JSL runs single threaded, so trees are fit sequentially; prediction descends
+ all rows through each tree with vectorized matrix operations to stay fast.
+
+ Rows with missing values in the selected columns are excluded from training
+ and receive a missing score (v1.1 used missing_action="fail" and errored).
+*******************************************************************************/
+
+Names Default To Here( 1 );
+
+If( !Namespace Exists( "pe_engine" ),
+	New Namespace( "pe_engine" )
+);
+
+// Text Box to receive progress updates; Empty() disables progress reporting
+pe_engine:progress_tb = Empty();
+
+pe_engine:progress = Function( {msg},
+	{default local},
+	If( !Is Empty( pe_engine:progress_tb ),
+		Try(
+			pe_engine:progress_tb << Set Text( msg );
+			Wait( 0 );
+		)
+	)
+);
+
+// average path length correction c(n), Liu et al. 2008
+pe_engine:cfactor = Function( {n},
+	{default local},
+	If(
+		n <= 1, 0,
+		n == 2, 1,
+		2 * (Log( n - 1 ) + 0.5772156649) - 2 * (n - 1) / n
+	)
+);
+
+pe_engine:get_params = Function( {method},
+	{default local},
+	prm = Associative Array();
+	prm["ndim"] = 1;
+	prm["ntrees"] = 100;
+	prm["maxdepth"] = 8;      // 0 = unlimited
+	prm["split"] = "uniform"; // "uniform" | "avggain" | "pooledgain"
+	prm["coefs"] = "normal";  // hyperplane coefficient distribution
+	prm["standardize"] = 0;   // standardize columns per node before combining
+	prm["penalize"] = 0;      // penalize out-of-range values at prediction
+	prm["colbyrange"] = 0;    // pick column with probability proportional to range
+	prm["ntry"] = 1;          // hyperplane candidates per node
+	If(
+		method == "iForest", Empty(),
+		method == "EIF",
+			prm["ndim"] = 2;
+			prm["coefs"] = "uniform",
+		method == "SciForest",
+			prm["ndim"] = 2;
+			prm["split"] = "avggain";
+			prm["standardize"] = 1;
+			prm["penalize"] = 1;
+			prm["ntry"] = 10,
+		method == "FCF",
+			prm["ndim"] = 2;
+			prm["ntrees"] = 200;
+			prm["maxdepth"] = 0;
+			prm["split"] = "pooledgain";
+			prm["standardize"] = 1,
+		method == "RRCF",
+			prm["maxdepth"] = 0;
+			prm["colbyrange"] = 1,
+		Throw( "Unknown Isolation Forest method: " || Char( method ) )
+	);
+	prm;
+);
+
+// s x s lower triangular matrix of ones, used for vectorized prefix sums
+pe_engine:make_lt = Function( {s},
+	{default local},
+	r = (1 :: s)`;
+	(r * J( 1, s, 1 )) >= (J( s, 1, 1 ) * r`);
+);
+
+/* Best split point along projection z by variance gain (full scan over the
+   sorted values, as isotree does for prob_pick_avg_gain / prob_pick_pooled_gain).
+   Returns {gain, threshold}; both missing when no valid split exists. */
+pe_engine:best_gain_split = Function( {z, LTfull, pooled},
+	{default local},
+	m = N Row( z );
+	zs = Sort Ascending( z );
+	If( zs[1] == zs[m],
+		Return( Eval List( {., .} ) )
+	);
+	LT = LTfull[1 :: m, 1 :: m];
+	s1 = LT * zs;          // prefix sums
+	s2 = LT * (zs :* zs);  // prefix sums of squares
+	il = (1 :: (m - 1))`;  // rows in left child when splitting after position i
+	ir = m - il;
+	sl1 = s1[il];
+	sl2 = s2[il];
+	sr1 = s1[m] - sl1;
+	sr2 = s2[m] - sl2;
+	ml = sl1 :/ il;
+	vl = sl2 :/ il - ml :* ml;
+	mr = sr1 :/ ir;
+	vr = sr2 :/ ir - mr :* mr;
+	sdl = Sqrt( E Max( vl, vl * 0 ) );
+	sdr = Sqrt( E Max( vr, vr * 0 ) );
+	vf = s2[m] / m - (s1[m] / m) ^ 2;
+	If( vf <= 0,
+		Return( Eval List( {., .} ) )
+	);
+	sdf = Sqrt( vf );
+	gains = If( pooled,
+		1 - (il :* sdl + ir :* sdr) :/ (m * sdf), // pooled gain (FCF)
+		1 - (sdl + sdr) / (2 * sdf)               // averaged gain (SciForest)
+	);
+	// a split between tied sorted values does not separate anything
+	ties = Loc( zs[(2 :: m)`] == zs[(1 :: (m - 1))`] );
+	If( N Row( ties ) > 0,
+		gains[ties] = -1e99
+	);
+	b = Loc Max( gains );
+	If( gains[b] <= -1e98,
+		Return( Eval List( {., .} ) )
+	);
+	Eval List( {gains[b], (zs[b] + zs[b + 1]) / 2} );
+);
+
+/* Choose a split for the node sample Xn (rows x all columns).
+   Returns an associative array; key "thresh" is missing when the node
+   cannot be split (all candidate projections constant). */
+pe_engine:choose_split = Function( {Xn, prm, LTfull},
+	{default local},
+	out = Associative Array();
+	out["thresh"] = .;
+	mrows = N Row( Xn );
+	lo = V Min( Xn )`;
+	hi = V Max( Xn )`;
+	rng = hi - lo;
+	cands = Loc( rng > 0 );
+	nc = N Row( cands );
+	If( nc == 0,
+		Return( out )
+	);
+	usedim = Min( prm["ndim"], nc );
+	If( usedim == 1,
+		// single column split
+		If( prm["colbyrange"] == 1,
+			// RRCF: choose the column with probability proportional to its range
+			w = rng[cands];
+			u = Random Uniform( 0, Sum( w ) );
+			kk = nc;
+			acc = 0;
+			For( j = 1, j <= nc, j++,
+				acc += w[j];
+				If( u <= acc,
+					kk = j;
+					Break();
+				);
+			);
+			c1 = cands[kk];
+		,
+			c1 = cands[Random Integer( 1, nc )]
+		);
+		z = Xn[0, c1];
+		out["c1"] = c1;   out["c2"] = 0;
+		out["a1"] = 1;    out["a2"] = 0;
+		out["mu1"] = 0;   out["mu2"] = 0;
+		out["sd1"] = 1;   out["sd2"] = 1;
+		If( prm["split"] == "uniform",
+			out["thresh"] = Random Uniform( lo[c1], hi[c1] );
+			out["z"] = z;
+		,
+			{g, th} = pe_engine:best_gain_split( z, LTfull, prm["split"] == "pooledgain" );
+			If( !Is Missing( th ),
+				out["thresh"] = th;
+				out["z"] = z;
+			);
+		);
+	,
+		// two column random hyperplane; keep the best of ntry candidates
+		bestg = .;
+		For( tt = 1, tt <= prm["ntry"], tt++,
+			pick = Random Shuffle( cands );
+			c1 = pick[1];
+			c2 = pick[2];
+			If( prm["coefs"] == "uniform",
+				a1 = Random Uniform( -1, 1 );
+				a2 = Random Uniform( -1, 1 );
+			,
+				a1 = Random Normal();
+				a2 = Random Normal();
+			);
+			x1 = Xn[0, c1];
+			x2 = Xn[0, c2];
+			mu1 = 0; mu2 = 0; sd1 = 1; sd2 = 1;
+			If( prm["standardize"] == 1,
+				mu1 = Sum( x1 ) / mrows;
+				mu2 = Sum( x2 ) / mrows;
+				sd1 = Sqrt( Max( Sum( x1 :* x1 ) / mrows - mu1 ^ 2, 0 ) );
+				sd2 = Sqrt( Max( Sum( x2 :* x2 ) / mrows - mu2 ^ 2, 0 ) );
+				If( sd1 == 0, sd1 = 1 );
+				If( sd2 == 0, sd2 = 1 );
+			);
+			z = a1 * ((x1 - mu1) / sd1) + a2 * ((x2 - mu2) / sd2);
+			th = .;
+			g = .;
+			If( prm["split"] == "uniform",
+				zl = Min( z );
+				zh = Max( z );
+				If( zh > zl,
+					th = Random Uniform( zl, zh );
+					g = 0;
+				);
+			,
+				{g, th} = pe_engine:best_gain_split( z, LTfull, prm["split"] == "pooledgain" )
+			);
+			If( !Is Missing( th ),
+				If( Is Missing( bestg ) | g > bestg,
+					bestg = g;
+					out["c1"] = c1;   out["c2"] = c2;
+					out["a1"] = a1;   out["a2"] = a2;
+					out["mu1"] = mu1; out["mu2"] = mu2;
+					out["sd1"] = sd1; out["sd2"] = sd2;
+					out["thresh"] = th;
+					out["z"] = z;
+				)
+			);
+		);
+	);
+	out;
+);
+
+/* Fit one isolation tree on the subsample Xs (m x p).
+   Returns an associative array of parallel node arrays. */
+pe_engine:fit_tree = Function( {Xs, prm, LTfull},
+	{default local},
+	m = N Row( Xs );
+	maxn = 2 * m; // a binary tree with <= m leaves has <= 2m-1 nodes
+	tleaf = J( maxn, 1, 1 );
+	tc1 = J( maxn, 1, 0 );  tc2 = J( maxn, 1, 0 );
+	ta1 = J( maxn, 1, 0 );  ta2 = J( maxn, 1, 0 );
+	tm1 = J( maxn, 1, 0 );  tm2 = J( maxn, 1, 0 );
+	ts1 = J( maxn, 1, 1 );  ts2 = J( maxn, 1, 1 );
+	tth = J( maxn, 1, 0 );
+	tlo = J( maxn, 1, 0 );  thi = J( maxn, 1, 0 );
+	tlf = J( maxn, 1, 0 );  trt = J( maxn, 1, 0 );
+	tvl = J( maxn, 1, 0 );
+	nn = 0;
+	maxdepth = If( prm["maxdepth"] > 0, prm["maxdepth"], m );
+	// explicit stack (parallel lists) instead of recursion
+	sRows = {};
+	sDepth = {};
+	sParent = {};
+	sSide = {};
+	Insert Into( sRows, (1 :: m)` );
+	Insert Into( sDepth, 0 );
+	Insert Into( sParent, 0 );
+	Insert Into( sSide, 0 );
+	While( N Items( sRows ) > 0,
+		k = N Items( sRows );
+		rows = sRows[k];
+		depth = sDepth[k];
+		parent = sParent[k];
+		side = sSide[k];
+		Remove From( sRows, k );
+		Remove From( sDepth, k );
+		Remove From( sParent, k );
+		Remove From( sSide, k );
+		mr = N Row( rows );
+		nn++;
+		me = nn;
+		If( parent > 0,
+			If( side == 1,
+				tlf[parent] = me,
+				trt[parent] = me
+			)
+		);
+		isleaf = 1;
+		If( mr > 1 & depth < maxdepth,
+			Xn = Xs[rows, 0];
+			spl = pe_engine:choose_split( Xn, prm, LTfull );
+			If( !Is Missing( spl["thresh"] ),
+				z = spl["z"];
+				li = Loc( z < spl["thresh"] );
+				ri = Loc( z >= spl["thresh"] );
+				If( N Row( li ) > 0 & N Row( ri ) > 0,
+					isleaf = 0;
+					tleaf[me] = 0;
+					tc1[me] = spl["c1"];  tc2[me] = spl["c2"];
+					ta1[me] = spl["a1"];  ta2[me] = spl["a2"];
+					tm1[me] = spl["mu1"]; tm2[me] = spl["mu2"];
+					ts1[me] = spl["sd1"]; ts2[me] = spl["sd2"];
+					tth[me] = spl["thresh"];
+					tlo[me] = Min( z );
+					thi[me] = Max( z );
+					Insert Into( sRows, rows[ri] );
+					Insert Into( sDepth, depth + 1 );
+					Insert Into( sParent, me );
+					Insert Into( sSide, 2 );
+					Insert Into( sRows, rows[li] );
+					Insert Into( sDepth, depth + 1 );
+					Insert Into( sParent, me );
+					Insert Into( sSide, 1 );
+				);
+			);
+		);
+		If( isleaf,
+			tleaf[me] = 1;
+			tvl[me] = depth + pe_engine:cfactor( mr );
+		);
+	);
+	tr = Associative Array();
+	rgx = (1 :: nn)`;
+	tr["leaf"] = tleaf[rgx];
+	tr["c1"] = tc1[rgx];  tr["c2"] = tc2[rgx];
+	tr["a1"] = ta1[rgx];  tr["a2"] = ta2[rgx];
+	tr["m1"] = tm1[rgx];  tr["m2"] = tm2[rgx];
+	tr["s1"] = ts1[rgx];  tr["s2"] = ts2[rgx];
+	tr["th"] = tth[rgx];
+	tr["lo"] = tlo[rgx];  tr["hi"] = thi[rgx];
+	tr["lc"] = tlf[rgx];  tr["rc"] = trt[rgx];
+	tr["val"] = tvl[rgx];
+	tr;
+);
+
+/* Average path length over the forest for every row of X (vectorized descent:
+   at each node all rows sitting there are projected and partitioned at once). */
+pe_engine:score_matrix = Function( {X, forest, prm},
+	{default local},
+	nq = N Row( X );
+	total = J( nq, 1, 0 );
+	nt = N Items( forest );
+	pen = prm["penalize"];
+	For( t = 1, t <= nt, t++,
+		tr = forest[t];
+		tleaf = tr["leaf"];
+		tc1 = tr["c1"];  tc2 = tr["c2"];
+		ta1 = tr["a1"];  ta2 = tr["a2"];
+		tm1 = tr["m1"];  tm2 = tr["m2"];
+		ts1 = tr["s1"];  ts2 = tr["s2"];
+		tth = tr["th"];
+		tlo = tr["lo"];  thi = tr["hi"];
+		tlf = tr["lc"];  trt = tr["rc"];
+		tvl = tr["val"];
+		sNode = {};
+		sRows = {};
+		Insert Into( sNode, 1 );
+		Insert Into( sRows, (1 :: nq)` );
+		While( N Items( sNode ) > 0,
+			k = N Items( sNode );
+			nd = sNode[k];
+			rows = sRows[k];
+			Remove From( sNode, k );
+			Remove From( sRows, k );
+			If( tleaf[nd] == 1,
+				total[rows] = total[rows] + tvl[nd]
+			,
+				z = If( tc2[nd] > 0,
+					ta1[nd] * ((X[rows, tc1[nd]] - tm1[nd]) / ts1[nd])
+					+ ta2[nd] * ((X[rows, tc2[nd]] - tm2[nd]) / ts2[nd]),
+					X[rows, tc1[nd]]
+				);
+				If( pen == 1,
+					// penalize_range: out-of-range values lose one depth unit
+					off = Loc( (z < tlo[nd]) + (z > thi[nd]) );
+					If( N Row( off ) > 0,
+						ro = rows[off];
+						total[ro] = total[ro] - 1;
+					);
+				);
+				li = Loc( z < tth[nd] );
+				ri = Loc( z >= tth[nd] );
+				If( N Row( li ) > 0,
+					Insert Into( sNode, tlf[nd] );
+					Insert Into( sRows, rows[li] );
+				);
+				If( N Row( ri ) > 0,
+					Insert Into( sNode, trt[nd] );
+					Insert Into( sRows, rows[ri] );
+				);
+			);
+		);
+		pe_engine:progress( Eval Insert( "Scoring rows: tree ^t^ of ^nt^" ) );
+	);
+	total / nt;
+);
+
+/* Fit a forest on X (complete rows only) and return anomaly scores for all
+   rows of X. X is an n x p matrix without missing values. */
+pe_engine:fit_and_score = Function( {X, method},
+	{default local},
+	prm = pe_engine:get_params( method );
+	n = N Row( X );
+	If( n < 2,
+		Throw( "Isolation Forest requires at least 2 complete rows." )
+	);
+	ss = Min( 256, n ); // isotree sample_size used by all five v1.1 methods
+	LTfull = If( prm["split"] != "uniform",
+		pe_engine:make_lt( ss ),
+		[1]
+	);
+	ntrees = prm["ntrees"];
+	forest = {};
+	For( t = 1, t <= ntrees, t++,
+		samp = Random Index( n, ss );
+		Xs = X[samp, 0];
+		Insert Into( forest, pe_engine:fit_tree( Xs, prm, LTfull ) );
+		pe_engine:progress( Eval Insert( "Fitting tree ^t^ of ^ntrees^" ) );
+	);
+	avgdepth = pe_engine:score_matrix( X, forest, prm );
+	cc = pe_engine:cfactor( ss );
+	Exp( avgdepth * (-Log( 2 ) / cc) );
+);
+
+
+/* Anomaly scores for every row of dt over the named numeric columns.
+   Rows with a missing value in any column are excluded from training and
+   receive a missing score. Returns an n x 1 vector aligned with the table. */
+pe_engine:anomaly_scores = Function( {dt, colnames, method},
+	{default local},
+	ncols = N Items( colnames );
+	If( ncols == 0,
+		Throw( "Isolation Forest: no numeric X columns to score." )
+	);
+	n = N Rows( dt );
+	X = J( n, ncols, 0 );
+	okmask = J( n, 1, 1 );
+	For( j = 1, j <= ncols, j++,
+		v = Column( dt, colnames[j] ) << Get Values;
+		If( !Is Matrix( v ),
+			Throw( "Column " || Char( colnames[j] ) || " is not numeric." )
+		);
+		X[0, j] = v;
+		msk = J( n, 1, 0 );
+		nmi = Loc Nonmissing( v );
+		If( N Row( nmi ) > 0,
+			msk[nmi] = 1
+		);
+		okmask = okmask :* msk;
+	);
+	good = Loc( okmask );
+	ngood = N Row( good );
+	If( ngood < 2,
+		Throw( "Fewer than 2 rows are complete in the selected columns." )
+	);
+	scores = pe_engine:fit_and_score( X[good, 0], method );
+	full = J( n, 1, . );
+	full[good] = scores;
+	full;
+);
+
+/* Replace character X columns with numeric columns using JMP's categorical
+   model parameterizations (the same codings Design Nom() / Design Ord()
+   produce for model effects):
+     nominal  ->  effect coding: k-1 columns named col[level]; +1 for the
+                  level, -1 on every column for the last (reference) level
+     ordinal  ->  cumulative coding: k-1 columns named col[b-a]; 1 when the
+                  value is at or above the higher level of the step
+   Levels are the sorted unique values ("" counts as a level when present).
+   Character columns with fewer than 2 or more than max_levels levels are
+   dropped with a log note. The original character columns are deleted from
+   dt and the updated list of X column names is returned. */
+pe_engine:encode_categorical = Function( {dt, x_names, max_levels},
+	{default local},
+	updated = {};
+	For( j = 1, j <= N Items( x_names ), j++,
+		cname = x_names[j];
+		colref = Column( dt, cname );
+		dtype = colref << Get Data Type;
+		If( dtype != "Character",
+			Insert Into( updated, cname );
+			Continue();
+		);
+		mtype = colref << Get Modeling Type;
+		vals = colref << Get Values;
+		n = N Items( vals );
+		lv_map = Associative Array( vals );
+		levels = lv_map << Get Keys;
+		k = N Items( levels );
+		If( k < 2 | k > max_levels,
+			Write( "\!NPredictor Explainer: dropping character column " || cname
+				|| " (" || Char( k ) || " level(s)).\!N" );
+			Try( dt << Delete Columns( cname ) );
+			Continue();
+		);
+		For( i = 1, i <= k, i++,
+			lv_map[levels[i]] = i
+		);
+		idx = J( n, 1, 0 );
+		For( i = 1, i <= n, i++,
+			idx[i] = lv_map[vals[i]]
+		);
+		For( i = 1, i <= k - 1, i++,
+			If( mtype == "Ordinal",
+				enc = idx >= (i + 1);
+				ncname = cname || "[" || levels[i + 1] || "-" || levels[i] || "]";
+			,
+				enc = (idx == i) - (idx == k);
+				ncname = cname || "[" || levels[i] || "]";
+			);
+			newcol = dt << New Column( ncname, Numeric, Continuous );
+			newcol << Set Values( enc );
+			Insert Into( updated, newcol << Get Name );
+		);
+		Try( dt << Delete Columns( cname ) );
+	);
+	updated;
+);
