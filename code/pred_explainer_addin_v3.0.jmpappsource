@@ -483,41 +483,49 @@ OKbuttonPress=Function({this},
 		print("Timestamp was given as X and t: calendar features will be added in Python");
 	);
 
-	// Fingerprints keep one target value per group; before any work starts,
-	// check that the user's Y is constant within each group and offer to cancel
+	// The batch fingerprints keep one value of the target per unique batch id
+	// (combined with product/grade and asset when given); if Y changes during
+	// a batch it is ambiguous which value gets correlated with the summary
+	// statistics, so warn and use the most common value per group instead.
+	// Col N Unique() and Col Mode() need JMP 19, the add-in minimum version.
+	pe_use_group_mode_y = 0;
 	if( nitems(itemsY)>0 & nitems(itemsBatchID)>0,
 		pe_ycheck_groups = itemsAsset || itemsGrade || itemsBatchID;
-		pe_ycheck_group_refs = {};
-		for( i = 1, i <= nitems(pe_ycheck_groups), i++,
-			Insert Into( pe_ycheck_group_refs, Column( dt, pe_ycheck_groups[i] ) )
-		);
-		pe_ycheck_dt = dt << Summary(
-			Invisible,
-			Group( pe_ycheck_group_refs ),
-			N Categories( itemsY[1] ),
-			Freq( "None" ),
-			Weight( "None" ),
-			statistics column name format( "stat of column" ),
-			Link to original data table( 0 )
-		);
-		pe_ycheck_names = pe_ycheck_dt << Get Column Names( String );
-		pe_ycheck_stat_col = "";
-		for( i = 1, i <= nitems(pe_ycheck_names), i++,
-			if( Contains( pe_ycheck_names[i], "N Categories" )>0,
-				pe_ycheck_stat_col = pe_ycheck_names[i]
-			)
-		);
-		pe_n_groups = NRows( pe_ycheck_dt );
+		pe_n_groups = 0;
 		pe_n_multi_groups = 0;
 		Try(
-			pe_ycheck_values = Column( pe_ycheck_dt, pe_ycheck_stat_col ) << Get Values;
-			pe_n_multi_groups = Sum( pe_ycheck_values > 1 );
+			// builds Col N Unique(y, batchid, <product>, <asset>) and
+			// Col Cumulative Sum(1, ...) with the groups the user selected
+			pe_ycheck_nunique_expr = Expr( Col N Unique() );
+			Insert Into( pe_ycheck_nunique_expr, Name Expr( As Column( dt, itemsY[1] ) ) );
+			pe_ycheck_first_expr = Expr( Col Cumulative Sum( 1 ) );
+			for( i = 1, i <= nitems(pe_ycheck_groups), i++,
+				Insert Into( pe_ycheck_nunique_expr, Name Expr( As Column( dt, pe_ycheck_groups[i] ) ) );
+				Insert Into( pe_ycheck_first_expr, Name Expr( As Column( dt, pe_ycheck_groups[i] ) ) );
+			);
+
+			Try( dt << Delete Columns( "pe_y_nunique_tmp" ) );
+			Try( dt << Delete Columns( "pe_group_first_tmp" ) );
+			Eval( Eval Expr( dt << New Column( "pe_y_nunique_tmp", Numeric,
+				Formula( Expr( Name Expr( pe_ycheck_nunique_expr ) ) ) ) ) );
+			// marks the first row of each group so groups can be counted
+			Eval( Eval Expr( dt << New Column( "pe_group_first_tmp", Numeric,
+				Formula( Expr( Name Expr( pe_ycheck_first_expr ) ) == 1 ) ) ) );
+			Column( dt, "pe_y_nunique_tmp" ) << Eval Formula;
+			Column( dt, "pe_group_first_tmp" ) << Eval Formula;
+			pe_y_nunique_vals = Column( dt, "pe_y_nunique_tmp" ) << Get Values;
+			pe_group_first_vals = Column( dt, "pe_group_first_tmp" ) << Get Values;
+			pe_n_groups = Sum( pe_group_first_vals );
+			pe_n_multi_groups = Sum( pe_group_first_vals :* (pe_y_nunique_vals > 1) );
+		,
+			print( "Could not check the target uniqueness per batch group" );
 		);
-		Close( pe_ycheck_dt, NoSave );
+		Try( dt << Delete Columns( "pe_y_nunique_tmp" ) );
+		Try( dt << Delete Columns( "pe_group_first_tmp" ) );
 
 		if( pe_n_multi_groups > 0,
 			pe_group_continue = 0;
-			pe_group_choice = New Window( "Target not constant per group",
+			pe_group_choice = New Window( "Target not constant per batch",
 				<<Modal,
 				<<Return Result,
 				<<On Open(
@@ -525,8 +533,8 @@ OKbuttonPress=Function({this},
 					pe_group_cancel_button << Set Button Name( "Cancel" );
 				),
 				V List Box(
-					Text Box( "The target (" || itemsY[1] || ") has more than one value in " || Char( pe_n_multi_groups ) || " of " || Char( pe_n_groups ) || " groups defined by: " || Concat Items( pe_ycheck_groups, ", " ) || ".", <<Set Wrap( 420 ) ),
-					Text Box( "If you continue, the most common target value within each group will be used as the target.", <<Set Wrap( 420 ) ),
+					Text Box( "The target (" || itemsY[1] || ") changes within " || Char( pe_n_multi_groups ) || " of the " || Char( pe_n_groups ) || " groups defined by: " || Concat Items( pe_ycheck_groups, ", " ) || ". It is ambiguous which value should be correlated with the per-group summary statistics.", <<Set Wrap( 420 ) ),
+					Text Box( "If you continue, the most common target value within each group (Col Mode) will be used as the target.", <<Set Wrap( 420 ) ),
 					Text Box( "Cancel to first prepare a better per-group column statistic for the target (for example a group mean).", <<Set Wrap( 420 ) ),
 					H List Box(
 						pe_group_continue_button = Button Box( "OK" ),
@@ -537,8 +545,9 @@ OKbuttonPress=Function({this},
 			Try( If( pe_group_choice["Button"] == 1, pe_group_continue = 1 ) );
 			Try( If( pe_group_choice["button"] == 1, pe_group_continue = 1 ) );
 			if( pe_group_continue == 0,
-				Throw( "Canceled by the user: the target is not constant within the grouping variables." );
+				Throw( "Canceled by the user: the target changes within the batch grouping variables." );
 			);
+			pe_use_group_mode_y = 1;
 		);
 	);
 
@@ -1418,10 +1427,32 @@ OKbuttonPress=Function({this},
 		try(Insert Into(batch_group_columns, Column(X, ItemsBatchID[1])));
 		
 		// Starts empty list and add elements if they exist
-		batch_subgroup_columns = list();	
+		batch_subgroup_columns = list();
 		try(Insert Into(batch_subgroup_columns, Column(X, ItemsPhaseID[1])));
-		
-		
+
+		// Y changing within a batch group would make the exported target depend
+		// on row order; use the group's most common value instead (Col Mode,
+		// JMP 19), as accepted by the user in the pre-run check
+		if( pe_use_group_mode_y == 1,
+			print("Replacing the target with its most common value per group (Col Mode)");
+			Try(
+				pe_ymode_expr = Expr( Col Mode() );
+				Insert Into( pe_ymode_expr, Name Expr( As Column( X, itemsY[1] ) ) );
+				for( i = 1, i <= nitems(pe_ycheck_groups), i++,
+					Insert Into( pe_ymode_expr, Name Expr( As Column( X, pe_ycheck_groups[i] ) ) );
+				);
+				pe_ymode_dtype = Column( X, itemsY[1] ) << Get Data Type;
+				Try( X << Delete Columns( "pe_y_mode_tmp" ) );
+				Eval( Eval Expr( X << New Column( "pe_y_mode_tmp", Expr( pe_ymode_dtype ),
+					Formula( Expr( Name Expr( pe_ymode_expr ) ) ) ) ) );
+				Column( X, "pe_y_mode_tmp" ) << Eval Formula;
+				Column( X, itemsY[1] ) << Set Values( Column( X, "pe_y_mode_tmp" ) << Get Values );
+				Try( X << Delete Columns( "pe_y_mode_tmp" ) );
+			,
+				print( "Could not replace the target by its per-group most common value; keeping the raw target" );
+			);
+		);
+
 		// Getting weight column if exisiting
 		Weight_group_column = "None";
 		Try(Weight_group_column = Column(X, itemsGroupWeight[1]););
@@ -1645,36 +1676,6 @@ OKbuttonPress=Function({this},
 				Close(X_subzs, nosave);
 			);
 
-		);
-
-		// The fingerprint target must be the most common value per group, as
-		// announced in the pre-run check (identical when Y is constant per group)
-		Try(
-			X_ymode = X << Summary(
-				Invisible,
-				Group( batch_group_columns ),
-				Mode( itemsY[1] ),
-				Freq( "None" ),
-				Weight( "None" ),
-				statistics column name format( "stat of column" ),
-				Link to original data table( 0 )
-			);
-			pe_ymode_names = X_ymode << Get Column Names( String );
-			pe_ymode_col = "";
-			For( i = 1, i <= N Items( pe_ymode_names ), i++,
-				If( Contains( pe_ymode_names[i], "Mode of" )>0,
-					pe_ymode_col = pe_ymode_names[i]
-				)
-			);
-			// both summaries group by the same columns of the same table, so
-			// their rows line up one to one
-			If( pe_ymode_col != "" & N Rows( X_ymode ) == N Rows( X_groupedby ),
-				Column( X_groupedby, itemsY[1] ) << Set Values( Column( X_ymode, pe_ymode_col ) << Get Values ),
-				print( "Could not align the per-group most common target; keeping the raw target values" )
-			);
-			Close( X_ymode, NoSave );
-		,
-			print( "Per-group most common target could not be computed; keeping the raw target values" )
 		);
 
 		//throw(); //debugging
