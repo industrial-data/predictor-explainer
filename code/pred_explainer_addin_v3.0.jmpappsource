@@ -211,6 +211,30 @@ ShowPredictorExplainerMessage = Function( {title, message},
 	)
 );
 
+// Python Submit blocks JMP, so this small window is the only feedback the
+// user gets until pip finishes; details stream to the JMP log meanwhile
+ShowInstallProgressWindow = Function( {message},
+	Try( pe_progress_window << Close Window );
+	pe_progress_window = New Window( "Predictor Explainer",
+		<<Show Toolbars( 0 ),
+		V List Box(
+			H List Box(
+				Busy Light( <<Automatic, Size( 24, 24 ) ),
+				Spacer Box( Size( 8, 0 ) ),
+				V List Box(
+					Text Box( message, <<Set Wrap( 380 ) ),
+					Text Box( "This can take a few minutes. Detailed pip output appears in the JMP log.", <<Set Wrap( 380 ) )
+				)
+			)
+		)
+	);
+	Wait( 0 ); // lets the window paint before Python blocks the interface
+);
+
+CloseInstallProgressWindow = Function( {},
+	Try( pe_progress_window << Close Window );
+);
+
 CheckPythonPackagesReady = Function( {},
 	{ready},
 	ready = 0;
@@ -313,21 +337,39 @@ InstallPythonPackagesCore = Function( {},
 	// broken or missing packages are repaired without asking
 	pe_install_update = 0;
 	If( CheckPythonPackagesReady() == 1,
-		New Window( "Python Packages",
+		// Update and Close are real OK/Cancel buttons relabelled on open: in a
+		// modal window only OK/Cancel can close it, and JMP appends its own
+		// extra OK button when neither is present
+		pe_install_choice = New Window( "Python Packages",
 			<<Modal,
+			<<Return Result,
+			<<On Open(
+				pe_update_button << Set Button Name( "Update" );
+				pe_close_button << Set Button Name( "Close" );
+			),
 			V List Box(
-				Text Box( "All required Python packages are already installed and working." ),
-				Text Box( "Do you want to update them to the latest versions?" ),
+				Text Box( "All required Python packages are already installed and working.", <<Set Wrap( 380 ) ),
+				Text Box( "Update replaces them with the latest versions; Close keeps the current versions.", <<Set Wrap( 380 ) ),
 				H List Box(
-					Button Box( "Update", pe_install_update = 1 ),
-					Button Box( "Keep current versions", pe_install_update = 0 )
+					pe_update_button = Button Box( "OK" ),
+					pe_close_button = Button Box( "Cancel" )
 				)
 			)
 		);
+		// the result key casing differs between JMP builds
+		Try( If( pe_install_choice["Button"] == 1, pe_install_update = 1 ) );
+		Try( If( pe_install_choice["button"] == 1, pe_install_update = 1 ) );
 		If( pe_install_update == 0,
 			pe_install_ok = 1;
 			Return();
 		);
+	);
+
+	ShowInstallProgressWindow(
+		If( pe_install_update == 1,
+			"Updating Python packages: numpy, pandas, scikit-learn, shap and lightgbm...",
+			"Installing missing Python packages: numpy, pandas, scikit-learn, shap and lightgbm..."
+		)
 	);
 
 	Clear Log();
@@ -342,6 +384,8 @@ InstallPythonPackagesCore = Function( {},
 		pe_install_ok = 0;
 		pe_install_message = "Python package installation failed before the installer completed. Review the JMP log.";
 	);
+
+	CloseInstallProgressWindow();
 
 	If( pe_install_ok == 1,
 		ShowPredictorExplainerMessage( "Python Package Install", pe_install_message ),
@@ -428,10 +472,76 @@ OKbuttonPress=Function({this},
 	itemsBatchID = colListBatchID << GetItems;		
 	print("Columns to export as BatchID", itemsBatchID);
 	
-	itemsPhaseID = colListPhaseID << GetItems;		
+	itemsPhaseID = colListPhaseID << GetItems;
 	print("Columns to export as PhaseID", itemsPhaseID);
-	
-	
+
+	// Time-derived features can leak the target through trends, so Python only
+	// adds them when the user deliberately gives the timestamp as X and as t
+	pe_add_time_features = 0;
+	if( nitems(itemsGroupTime)>0 & Contains( itemsX, itemsGroupTime[1] )>0,
+		pe_add_time_features = 1;
+		print("Timestamp was given as X and t: calendar features will be added in Python");
+	);
+
+	// Fingerprints keep one target value per group; before any work starts,
+	// check that the user's Y is constant within each group and offer to cancel
+	if( nitems(itemsY)>0 & nitems(itemsBatchID)>0,
+		pe_ycheck_groups = itemsAsset || itemsGrade || itemsBatchID;
+		pe_ycheck_group_refs = {};
+		for( i = 1, i <= nitems(pe_ycheck_groups), i++,
+			Insert Into( pe_ycheck_group_refs, Column( dt, pe_ycheck_groups[i] ) )
+		);
+		pe_ycheck_dt = dt << Summary(
+			Invisible,
+			Group( pe_ycheck_group_refs ),
+			N Categories( itemsY[1] ),
+			Freq( "None" ),
+			Weight( "None" ),
+			statistics column name format( "stat of column" ),
+			Link to original data table( 0 )
+		);
+		pe_ycheck_names = pe_ycheck_dt << Get Column Names( String );
+		pe_ycheck_stat_col = "";
+		for( i = 1, i <= nitems(pe_ycheck_names), i++,
+			if( Contains( pe_ycheck_names[i], "N Categories" )>0,
+				pe_ycheck_stat_col = pe_ycheck_names[i]
+			)
+		);
+		pe_n_groups = NRows( pe_ycheck_dt );
+		pe_n_multi_groups = 0;
+		Try(
+			pe_ycheck_values = Column( pe_ycheck_dt, pe_ycheck_stat_col ) << Get Values;
+			pe_n_multi_groups = Sum( pe_ycheck_values > 1 );
+		);
+		Close( pe_ycheck_dt, NoSave );
+
+		if( pe_n_multi_groups > 0,
+			pe_group_continue = 0;
+			pe_group_choice = New Window( "Target not constant per group",
+				<<Modal,
+				<<Return Result,
+				<<On Open(
+					pe_group_continue_button << Set Button Name( "Continue" );
+					pe_group_cancel_button << Set Button Name( "Cancel" );
+				),
+				V List Box(
+					Text Box( "The target (" || itemsY[1] || ") has more than one value in " || Char( pe_n_multi_groups ) || " of " || Char( pe_n_groups ) || " groups defined by: " || Concat Items( pe_ycheck_groups, ", " ) || ".", <<Set Wrap( 420 ) ),
+					Text Box( "If you continue, the most common target value within each group will be used as the target.", <<Set Wrap( 420 ) ),
+					Text Box( "Cancel to first prepare a better per-group column statistic for the target (for example a group mean).", <<Set Wrap( 420 ) ),
+					H List Box(
+						pe_group_continue_button = Button Box( "OK" ),
+						pe_group_cancel_button = Button Box( "Cancel" )
+					)
+				)
+			);
+			Try( If( pe_group_choice["Button"] == 1, pe_group_continue = 1 ) );
+			Try( If( pe_group_choice["button"] == 1, pe_group_continue = 1 ) );
+			if( pe_group_continue == 0,
+				Throw( "Canceled by the user: the target is not constant within the grouping variables." );
+			);
+		);
+	);
+
 	print("Starting computation with user inputs (X)");
 	
 	//adds row_index column into table
@@ -1534,10 +1644,40 @@ OKbuttonPress=Function({this},
 				
 				Close(X_subzs, nosave);
 			);
-			
-		);	
-		
-		//throw(); //debugging 
+
+		);
+
+		// The fingerprint target must be the most common value per group, as
+		// announced in the pre-run check (identical when Y is constant per group)
+		Try(
+			X_ymode = X << Summary(
+				Invisible,
+				Group( batch_group_columns ),
+				Mode( itemsY[1] ),
+				Freq( "None" ),
+				Weight( "None" ),
+				statistics column name format( "stat of column" ),
+				Link to original data table( 0 )
+			);
+			pe_ymode_names = X_ymode << Get Column Names( String );
+			pe_ymode_col = "";
+			For( i = 1, i <= N Items( pe_ymode_names ), i++,
+				If( Contains( pe_ymode_names[i], "Mode of" )>0,
+					pe_ymode_col = pe_ymode_names[i]
+				)
+			);
+			// both summaries group by the same columns of the same table, so
+			// their rows line up one to one
+			If( pe_ymode_col != "" & N Rows( X_ymode ) == N Rows( X_groupedby ),
+				Column( X_groupedby, itemsY[1] ) << Set Values( Column( X_ymode, pe_ymode_col ) << Get Values ),
+				print( "Could not align the per-group most common target; keeping the raw target values" )
+			);
+			Close( X_ymode, NoSave );
+		,
+			print( "Per-group most common target could not be computed; keeping the raw target values" )
+		);
+
+		//throw(); //debugging
 		print("Setting summarized table (fingerprints) for predictor screening");
 		
 		print("Moving y to the beggining of the summarized table");	
@@ -2086,6 +2226,7 @@ OKbuttonPress=Function({this},
 		Python Send( pe_y_cols );
 		Python Send( pe_time_cols );
 		Python Send( pe_weight_cols );
+		Python Send( pe_add_time_features );
 		Python Send( pe_n_trees );
 		Python Send( pe_signal_to_noise );
 		Python Send( pe_add_diffs );

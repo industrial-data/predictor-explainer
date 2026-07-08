@@ -19,7 +19,7 @@ APP_SOURCE = REPO_ROOT / "code" / "pred_explainer_addin_v3.0.jmpappsource"
 OUTPUT = REPO_ROOT / "Latest_PredictorExplainer.jmpaddin"
 
 DISPLAY_VERSION = "v.3.0"
-ADDIN_VERSION = "260706"  # numeric date so JMP replaces older installed versions
+ADDIN_VERSION = "260709"  # numeric date so JMP replaces older installed versions
 MIN_JMP_VERSION = "19"  # embedded Python with jmp/jmputils modules
 
 PYTHON_SCRIPTS = [

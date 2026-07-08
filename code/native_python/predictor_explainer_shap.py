@@ -6,6 +6,10 @@ Expected globals supplied by JSL:
     pe_y_cols
     pe_time_cols
     pe_weight_cols
+    pe_add_time_features  (1 = derive calendar features from the time column;
+                           JSL sets it only when the user gives the timestamp
+                           both as X and as t, Datetime — otherwise time-based
+                           predictors would leak the target through trends)
     pe_n_trees
     pe_signal_to_noise
     pe_add_diffs
@@ -183,6 +187,7 @@ def _run_analysis():
     if missing_cols:
         raise ValueError("Columns were not found in the transferred JMP table: " + ", ".join(missing_cols))
 
+    add_time_features = int(_as_scalar(_get_global("pe_add_time_features"), 0)) == 1
     n_trees = max(1, int(_as_scalar(_get_global("pe_n_trees"), 100)))
     signal_to_noise = float(_as_scalar(_get_global("pe_signal_to_noise"), 1.0))
     add_diffs = int(_as_scalar(_get_global("pe_add_diffs"), 1)) == 1
@@ -206,10 +211,17 @@ def _run_analysis():
 
     time_series = None
     if time_cols:
+        # the timestamp itself is kept out of the model and only carried
+        # through for the SHAP plot tables
         time_series = input_df[time_cols[0]].rename(time_cols[0])
-        x_model = _add_time_features(x_model, time_series)
-        for col in x_model.columns:
-            display_name.setdefault(col, col)
+        if add_time_features:
+            x_model = _add_time_features(x_model, time_series)
+            for col in x_model.columns:
+                display_name.setdefault(col, col)
+        else:
+            print(
+                "Time features skipped: give the timestamp as X and as t, Datetime to add them."
+            )
 
     if add_diffs:
         x_diff = x_model.diff(periods=diff_rows, axis=0)
